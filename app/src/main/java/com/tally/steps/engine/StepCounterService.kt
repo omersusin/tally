@@ -107,9 +107,17 @@ class StepCounterService : Service() {
                 combine(repo.today(), repo.paused()) { day, paused -> Triple(day.steps, day.goal, paused) }
                     .distinctUntilChanged()
                     .collect { (steps, goal, paused) ->
-                        runCatching {
-                            NotificationManagerCompat.from(this@StepCounterService)
-                                .notify(NOTIF_ID, buildSnapshot(steps, goal, paused))
+                        // POST_NOTIFICATIONS is runtime-revocable: skip the update
+                        // when denied (counting continues, only the shade goes stale).
+                        val allowed = ContextCompat.checkSelfPermission(
+                            this@StepCounterService,
+                            android.Manifest.permission.POST_NOTIFICATIONS,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (allowed) {
+                            runCatching {
+                                NotificationManagerCompat.from(this@StepCounterService)
+                                    .notify(NOTIF_ID, buildSnapshot(steps, goal, paused))
+                            }
                         }
                     }
             }
