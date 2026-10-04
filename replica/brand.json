@@ -1,0 +1,1 @@
+{"name": "Tally", "package": "com.tally.steps", "avoid": ["Stride", "Pacer", "Google Fit", "Samsung Health", "Accupedo", "Leap Pedometer"], "colors": ["#006bff"], "primary": {"light": "#B3400A", "dark": "#FF8A3D"}}

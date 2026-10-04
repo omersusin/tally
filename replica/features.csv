@@ -1,0 +1,20 @@
+feature,area,priority,original,clone,notes
+live step count,today,must,yes,no,TYPE_STEP_COUNTER + Health Connect merge
+daily goal ring,today,must,yes,no,celebration on reach
+distance/kcal/active estimates,today,must,yes,no,personal metrics based
+midnight rollover + reboot recovery,engine,must,yes,no,BootReceiver + WorkManager
+battery-exemption + OEM autostart prompt,engine,must,partial,no,Stride lacks this; #1 killer fix
+offline-first no-login,trust,must,partial,no,Room + local backup
+sensitivity setting,accuracy,must,partial,no,Accupedo-style; fixes over/under-count
+day/week/month charts,history,must,yes,no,
+streaks + awards,engage,must,yes,no,
+home widget + notification count,glance,must,partial,no,Glance widget + persistent notif
+manual step edit/delete,trust,should,no,no,users ask by name
+treadmill/indoor mode,workout,should,no,no,asked by name; step-only no GPS
+GPS workout walk/run/hike/ride,workout,should,yes,no,opt-in; step fallback if denied
+pause/resume + auto-break,workout,should,partial,no,
+export CSV/PDF + backup/restore,trust,should,partial,no,prevents history-loss anger
+Health Connect sync,ecosystem,should,yes,no,read+write without double-count
+units + theme + AMOLED,settings,should,yes,no,
+goal adaptive suggestions,engage,could,no,no,Pacer paywalls this; ours free
+challenges/streak repair,engage,could,partial,no,local-first no server
