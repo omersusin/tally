@@ -25,6 +25,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tally.steps.data.Day
+import com.tally.steps.engine.GoalCoach
 import com.tally.steps.ui.workout.EngineBridge
 import java.time.LocalDate
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -139,37 +140,43 @@ class AwardsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun streak(days: List<Day>): StreakInfo {
-        val goalEpochs = days.filter { isGoalDay(it) }.map { it.epochDay }.toSortedSet()
-        if (goalEpochs.isEmpty()) {
+        if (days.none { isGoalDay(it) }) {
             return StreakInfo(
                 0, StreakStatus.NONE,
                 "Hit your daily goal to start a streak. " +
                     "Missing your goal two days in a row ends it.",
             )
         }
-        val today = LocalDate.now().toEpochDay()
-        val todayHit = today in goalEpochs
-        var run = 0
-        var cursor = if (todayHit) today else today - 1
-        while (cursor in goalEpochs) {
-            run++
-            cursor--
+        // One shared helper (also used by History): goal days connected
+        // through rest days. Pair is (streak length, rest days used).
+        val (run, rest) = GoalCoach.currentStreak(
+            days.map {
+                GoalCoach.DayMark(it.epochDay, isGoalDay(it), it.restDay)
+            },
+        )
+        val restNote = if (rest > 0) {
+            " Includes $rest rest day${if (rest == 1) "" else "s"}."
+        } else {
+            ""
         }
+        val today = LocalDate.now().toEpochDay()
+        val todayHit = days.any { it.epochDay == today && isGoalDay(it) }
         return when {
             run == 0 -> StreakInfo(
                 0, StreakStatus.BROKEN,
-                "Your last goal day was ${today - goalEpochs.max()} day(s) ago. " +
-                    "Start a new streak today — yesterday doesn't count against you twice.",
+                "Your last goal day was ${today - days.filter { isGoalDay(it) }.maxOf { it.epochDay }} day(s) ago. " +
+                    "Start a new streak today — yesterday doesn't count against you twice. " +
+                    "Missed yesterday? Mark it as a rest day in History (one per week).",
             )
             !todayHit -> StreakInfo(
                 run, StreakStatus.AT_RISK,
                 "$run day${if (run == 1) "" else "s"} and counting — " +
-                    "but today isn't a goal day yet. Walk to keep it alive.",
+                    "but today isn't a goal day yet. Walk to keep it alive.$restNote",
             )
             else -> StreakInfo(
                 run, StreakStatus.ACTIVE,
-                "$run day${if (run == 1) "" else "s"} in a row, including today. " +
-                    "One missed day pauses it; two missed days end it.",
+                "$run day${if (run == 1) "" else "s"} in a row, including today.$restNote " +
+                    "One missed day ends it; a rest day (one per week) preserves it.",
             )
         }
     }

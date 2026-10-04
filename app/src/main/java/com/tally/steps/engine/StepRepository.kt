@@ -77,6 +77,64 @@ class StepRepository private constructor(
     fun paused(): Flow<Boolean> = prefs.paused
 
     /**
+     * Mark a past missed day as rest, preserving streaks through it. Only for
+     * past days that missed their goal (epochDay < today, steps < goal, not
+     * already rest). At most one rest day per rolling 7 days: any other rest
+     * within 6 days either side rejects. Returns true when saved. Additive —
+     * touches only the restDay flag and updatedAt, never the step math.
+     */
+    suspend fun markRestDay(epochDay: Long): Boolean = mutex.withLock {
+        val today = todayEpoch()
+        if (epochDay >= today) return false
+        val row = dao.getDay(epochDay) ?: return false
+        if (row.restDay) return false
+        if (row.goal <= 0 || row.steps >= row.goal) return false
+        val near = dao.historyFlow(365).first()
+        if (near.any {
+                it.restDay && it.epochDay != epochDay &&
+                    kotlin.math.abs(it.epochDay - epochDay) <= 6
+            }
+        ) return false
+        dao.upsert(row.copy(restDay = true, updatedAt = now()))
+        true
+    }
+
+    /**
+     * Current streak via [GoalCoach]: goal days connected through rest days.
+     * Returns (days, restDaysUsed). Read-only, additive.
+     */
+    suspend fun currentStreak(): Pair<Int, Int> {
+        val today = today().first()
+        val days = dao.historyFlow(365).first()
+        val all = if (days.none { it.epochDay == today.epochDay }) {
+            listOf(today) + days
+        } else {
+            days.map { if (it.epochDay == today.epochDay) today else it }
+        }
+        return GoalCoach.currentStreak(
+            all.map { GoalCoach.DayMark(it.epochDay, it.goal > 0 && it.steps >= it.goal, it.restDay) },
+        )
+    }
+
+    /**
+     * Quiet goal suggestion via [GoalCoach], from the last 7 complete days
+     * (today is partial, so it's excluded). Null when silence is honest.
+     * Read-only, additive.
+     */
+    suspend fun goalNudge(): GoalCoach.GoalNudge? {
+        val goal = prefs.goal.first()
+        val last7 = dao.historyFlow(8).first()
+            .filter { it.epochDay < todayEpoch() }
+            .sortedBy { it.epochDay }
+            .takeLast(7)
+            .map { it.steps + it.manualDelta }
+        return GoalCoach.nudgeFor(last7, goal)
+    }
+
+    /** Suggested goal only; null when silence is honest. See [goalNudge]. */
+    suspend fun suggestedGoal(): Int? = goalNudge()?.suggestedGoal
+
+    /**
      * Sensitivity meaning (the stored L/M/H finally means something concrete):
      * minimum steps within one clock minute for that minute to count as an
      * active minute. L=100 (only brisk sustained walking), M=60 (~1 step/s

@@ -16,5 +16,5 @@ pause/resume + auto-break,workout,should,partial,no,
 export CSV/PDF + backup/restore,trust,should,partial,no,prevents history-loss anger
 Health Connect sync,ecosystem,should,yes,no,read+write without double-count
 units + theme + AMOLED,settings,should,yes,no,
-goal adaptive suggestions,engage,could,no,no,Pacer paywalls this; ours free
-challenges/streak repair,engage,could,partial,no,local-first no server
+goal adaptive suggestions,engage,could,no,yes,median-of-7 nudge card, quiet, local only
+challenges/streak repair,engage,could,partial,yes,rest-day repair 1 per week, local only

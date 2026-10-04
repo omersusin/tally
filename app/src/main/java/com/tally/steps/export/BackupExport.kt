@@ -24,8 +24,10 @@ import org.json.JSONObject
  */
 object BackupExport {
     const val CSV_HEADER =
+        "epochDay,date,steps,distanceM,kcal,activeMin,goal,manualDelta,source,updatedAt,restDay"
+    private const val CSV_HEADER_V1 =
         "epochDay,date,steps,distanceM,kcal,activeMin,goal,manualDelta,source,updatedAt"
-    private const val BACKUP_VERSION = 1
+    private const val BACKUP_VERSION = 2
 
     // ---------- export ----------
 
@@ -45,6 +47,7 @@ object BackupExport {
                     d.manualDelta.toString(),
                     csvCell(sanitizeForCsv(d.source)),
                     d.updatedAt.toString(),
+                    if (d.restDay) "1" else "0",
                 ).joinToString(","),
             )
         }
@@ -115,6 +118,8 @@ object BackupExport {
         val manualDelta: Int,
         val source: String,
         val updatedAt: Long,
+        /** v2 only; v1 backups restore as false. */
+        val restDay: Boolean,
     )
 
     suspend fun restore(context: Context, uri: Uri): RestoreOutcome = withContext(Dispatchers.IO) {
@@ -159,20 +164,23 @@ object BackupExport {
                     ?: return RestoreOutcome.Invalid(
                         listOf("days.csv is missing — is this a Tally backup?"),
                     )
+                // v1 files predate rest days; v2 carries the restDay column.
+                var backupVersion = 1
                 val metaEntry = zip.getEntry("meta.json")
                 if (metaEntry != null) {
                     val meta = runCatching {
                         JSONObject(zip.getInputStream(metaEntry).use { it.readTextCapped(MAX_BACKUP_BYTES) })
                     }.getOrNull()
                     val version = meta?.optInt("version", -1) ?: -1
-                    if (version != BACKUP_VERSION) {
+                    if (version != 1 && version != BACKUP_VERSION) {
                         return RestoreOutcome.Invalid(
-                            listOf("Backup version $version is not supported (this app reads v$BACKUP_VERSION)."),
+                            listOf("Backup version $version is not supported (this app reads v1–v$BACKUP_VERSION)."),
                         )
                     }
+                    backupVersion = version
                 }
                 val csvText = zip.getInputStream(csvEntry).use { it.readTextCapped(MAX_BACKUP_BYTES) }
-                val days = parseAndValidateCsv(csvText, errors)
+                val days = parseAndValidateCsv(csvText, errors, backupVersion)
                 if (errors.isNotEmpty() || days == null) {
                     return RestoreOutcome.Invalid(errors.ifEmpty { listOf("days.csv is empty.") })
                 }
@@ -210,14 +218,19 @@ object BackupExport {
      * All-or-nothing validation. Returns null when any row fails; every
      * failure is recorded with a line number so the user gets a real reason.
      */
-    fun parseAndValidateCsv(text: String, errors: MutableList<String>): List<RestoredDay>? {
+    fun parseAndValidateCsv(
+        text: String,
+        errors: MutableList<String>,
+        backupVersion: Int = BACKUP_VERSION,
+    ): List<RestoredDay>? {
         val lines = text.lines().filter { it.isNotBlank() }
         if (lines.isEmpty()) {
             errors += "The file is empty."
             return null
         }
-        if (lines.first().trim() != CSV_HEADER) {
-            errors += "First line must be the Tally header: $CSV_HEADER."
+        val expectedHeader = if (backupVersion >= 2) CSV_HEADER else CSV_HEADER_V1
+        if (lines.first().trim() != expectedHeader) {
+            errors += "First line must be the Tally header: $expectedHeader."
             return null
         }
         val today = LocalDate.now().toEpochDay()
@@ -230,8 +243,9 @@ object BackupExport {
                 return null
             }
             val cells = splitCsv(raw)
-            if (cells.size != 10) {
-                errors += "Line $lineNo: expected 10 columns, found ${cells.size}."
+            val wantCols = if (backupVersion >= 2) 11 else 10
+            if (cells.size != wantCols) {
+                errors += "Line $lineNo: expected $wantCols columns, found ${cells.size}."
                 return@forEachIndexed
             }
             try {
@@ -248,6 +262,18 @@ object BackupExport {
                     if (s.length >= 2 && s[0] == '\'' && s[1] in FORMULA_TRIGGERS) s.drop(1) else s
                 }
                 val updatedAt = cells[9].toLong()
+                val restDay = if (backupVersion >= 2) {
+                    when (cells[10].trim()) {
+                        "1" -> true
+                        "0" -> false
+                        else -> {
+                            errors += "Line $lineNo: rest day must be 0 or 1."
+                            return@forEachIndexed
+                        }
+                    }
+                } else {
+                    false
+                }
                 val expectedDate = runCatching { LocalDate.ofEpochDay(epochDay).toString() }
                     .getOrNull()
                 when {
@@ -273,7 +299,7 @@ object BackupExport {
                         errors += "Line $lineNo: day $epochDay appears twice."
                     else -> out += RestoredDay(
                         epochDay, steps, distanceM, kcal, activeMin,
-                        goal, manualDelta, source, updatedAt,
+                        goal, manualDelta, source, updatedAt, restDay,
                     )
                 }
             } catch (e: NumberFormatException) {

@@ -17,4 +17,10 @@ data class Day(
     val manualDelta: Int,
     val source: String,
     val updatedAt: Long,
+    /**
+     * Rest day: a past missed day the user marked to preserve a streak.
+     * Defaults false so every existing constructor call keeps compiling and
+     * every pre-v3 row reads as "not rest" until Migration(2, 3) backfills 0.
+     */
+    val restDay: Boolean = false,
 )

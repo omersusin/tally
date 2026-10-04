@@ -32,6 +32,7 @@ class PrefsStore(private val context: Context) {
         val bootId = longPreferencesKey("boot_id")
         val paused = booleanPreferencesKey("paused")
         val lastSensorAtMs = longPreferencesKey("last_sensor_at_ms")
+        val lastNudgeDay = stringPreferencesKey("last_nudge_day")
     }
 
     val goal: Flow<Int> = context.tallyPrefs.data.map { it[K.goal] ?: 8000 }
@@ -53,6 +54,8 @@ class PrefsStore(private val context: Context) {
     val paused: Flow<Boolean> = context.tallyPrefs.data.map { it[K.paused] ?: false }
     /** Last accepted sensor-event time; persisted so post-restart gap-fill doesn't always trigger. */
     val lastSensorAtMs: Flow<Long> = context.tallyPrefs.data.map { it[K.lastSensorAtMs] ?: 0L }
+    /** "yyyy-MM-dd" of the last goal-nudge card shown; empty = never. Guards once-per-day. */
+    val lastNudgeDay: Flow<String> = context.tallyPrefs.data.map { it[K.lastNudgeDay] ?: "" }
 
     suspend fun setGoal(v: Int) = context.tallyPrefs.edit { it[K.goal] = v.coerceIn(1_000, 100_000) }
     suspend fun setHeightCm(v: Int) = context.tallyPrefs.edit { it[K.heightCm] = v.coerceIn(100, 230) }
@@ -75,6 +78,7 @@ class PrefsStore(private val context: Context) {
     suspend fun resetBaseline() = setBaseline(-1L)
     suspend fun setBootId(v: Long) = context.tallyPrefs.edit { it[K.bootId] = v }
     suspend fun setPaused(v: Boolean) = context.tallyPrefs.edit { it[K.paused] = v }
+    suspend fun setLastNudgeDay(v: String) = context.tallyPrefs.edit { it[K.lastNudgeDay] = v }
 
     companion object {
         @Volatile

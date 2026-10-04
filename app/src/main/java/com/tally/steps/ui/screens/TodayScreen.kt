@@ -1,5 +1,6 @@
 package com.tally.steps.ui.screens
 
+import android.app.Application
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -35,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -51,7 +53,11 @@ import com.tally.steps.ui.components.GiantCount
 import com.tally.steps.ui.components.GoalRing
 import com.tally.steps.ui.components.StatRow
 import com.tally.steps.ui.today.TodayViewModel
+import com.tally.steps.ui.workout.EngineBridge
+import com.tally.steps.engine.GoalCoach
 import java.text.NumberFormat
+import java.time.LocalDate
+import kotlinx.coroutines.launch
 
 @Composable
 private fun reduceMotion(): Boolean {
@@ -172,6 +178,8 @@ fun TodayScreen(
         ) {
             Text("Goal: ${fmt.format(current.goal)} — Change")
         }
+
+        GoalNudgeCard(onApplyGoal = { vm.setGoal(it) })
 
         PauseResumeFab(paused = paused, onToggle = { vm.setPaused(!paused) })
 
@@ -317,6 +325,70 @@ private fun TargetPicker(
             ) { Text("Cancel") }
         },
     )
+}
+
+/**
+ * Quiet once-a-day goal nudge. Shows only when GoalCoach has something worth
+ * saying; Apply and Not now both record today so it never nags twice.
+ * Plain text, never badge-shame. 48dp buttons with screen-reader labels.
+ */
+@Composable
+private fun GoalNudgeCard(onApplyGoal: (Int) -> Unit) {
+    val context = LocalContext.current
+    val app = context.applicationContext as Application
+    val repo = remember { EngineBridge.stepRepository(app) }
+    val prefs = remember { EngineBridge.prefsStore(app) }
+    val scope = rememberCoroutineScope()
+    val historyFlow = remember { repo.history(8) }
+    val goalFlow = remember { prefs.goal }
+    val nudgeDayFlow = remember { prefs.lastNudgeDay }
+    val history by historyFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val goal by goalFlow.collectAsStateWithLifecycle(initialValue = 8_000)
+    val lastNudge by nudgeDayFlow.collectAsStateWithLifecycle(initialValue = "")
+    val today = LocalDate.now()
+    val todayEpoch = today.toEpochDay()
+    val nudge = remember(history, goal) {
+        GoalCoach.nudgeFor(
+            history.filter { it.epochDay < todayEpoch }
+                .sortedBy { it.epochDay }
+                .takeLast(7)
+                .map { it.steps + it.manualDelta },
+            goal,
+        )
+    }
+    if (nudge == null || lastNudge == today.toString()) return
+    val fmt = NumberFormat.getIntegerInstance()
+    val todayStr = today.toString()
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Walking ~${fmt.format(nudge.dailyAverage)} a day lately. " +
+                    "Raise goal to ${fmt.format(nudge.suggestedGoal)}?",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        onApplyGoal(nudge.suggestedGoal)
+                        scope.launch { prefs.setLastNudgeDay(todayStr) }
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp).semantics {
+                        contentDescription =
+                            "Apply suggested goal of ${fmt.format(nudge.suggestedGoal)} steps"
+                    },
+                ) { Text("Apply") }
+                OutlinedButton(
+                    onClick = { scope.launch { prefs.setLastNudgeDay(todayStr) } },
+                    modifier = Modifier.heightIn(min = 48.dp).semantics {
+                        contentDescription = "Dismiss goal suggestion"
+                    },
+                ) { Text("Not now") }
+            }
+        }
+    }
 }
 
 /** Shown once per day on goal reach. No confetti under reduce-motion. */

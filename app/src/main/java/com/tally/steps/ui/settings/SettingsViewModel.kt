@@ -180,6 +180,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                         manualDelta = it.manualDelta,
                         source = it.source,
                         updatedAt = it.updatedAt,
+                        restDay = it.restDay,
                     )
                 },
             )
