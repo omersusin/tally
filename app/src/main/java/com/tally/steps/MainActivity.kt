@@ -40,7 +40,6 @@ import com.tally.steps.ui.screens.SettingsScreen
 import com.tally.steps.ui.screens.TodayScreen
 import com.tally.steps.ui.screens.WorkoutScreen
 import com.tally.steps.ui.theme.TallyTheme
-import kotlinx.coroutines.flow.map
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
 
@@ -63,9 +62,9 @@ class MainActivity : ComponentActivity() {
                 // Onboarding gate: the S01 screen (other agent) marks
                 // ONBOARDING_DONE=true in the same "tally_prefs" store when the
                 // user finishes or skips. Until then, onboarding owns the window.
-                val done: Boolean? by applicationContext.tallyPrefs.data
-                    .map { it[ONBOARDING_DONE] == true }
+                val prefs by applicationContext.tallyPrefs.data
                     .collectAsStateWithLifecycle(initialValue = null)
+                val done: Boolean? = prefs?.let { it[ONBOARDING_DONE] == true }
                 when (done) {
                     null -> Box(
                         modifier = Modifier.fillMaxSize(),
