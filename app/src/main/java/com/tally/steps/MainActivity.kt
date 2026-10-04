@@ -1,6 +1,5 @@
 package com.tally.steps
 
-import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -24,8 +23,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -51,20 +48,17 @@ private val Tabs = listOf(
     Tab("settings", "Settings", Icons.Filled.Settings),
 )
 
-private val Context.tallyPrefs by preferencesDataStore("tally_prefs")
-private val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             TallyTheme {
-                // Onboarding gate: the S01 screen (other agent) marks
-                // ONBOARDING_DONE=true in the same "tally_prefs" store when the
-                // user finishes or skips. Until then, onboarding owns the window.
-                val prefs by applicationContext.tallyPrefs.data
+                // Single DataStore owner is PrefsStore (TallyApp.prefs) — no
+                // second delegate here (two instances on one file = crash).
+                val app = application as TallyApp
+                val prefs by app.prefs.onboardingDone
                     .collectAsStateWithLifecycle(initialValue = null)
-                val done: Boolean? = prefs?.let { it[ONBOARDING_DONE] == true }
+                val done: Boolean? = prefs
                 when (done) {
                     null -> Box(
                         modifier = Modifier.fillMaxSize(),
