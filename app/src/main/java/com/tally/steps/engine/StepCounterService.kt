@@ -22,6 +22,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.tally.steps.MainActivity
+import com.tally.steps.widget.TallyWidget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -107,6 +108,10 @@ class StepCounterService : Service() {
                 combine(repo.today(), repo.paused()) { day, paused -> Triple(day.steps, day.goal, paused) }
                     .distinctUntilChanged()
                     .collect { (steps, goal, paused) ->
+                        // Live widget push on each distinct change (Glance reads
+                        // stored state, never blocks on the DB). Hourly
+                        // SyncWorker remains the safety net for missed pushes.
+                        runCatching { TallyWidget.requestUpdate(this@StepCounterService) }
                         // POST_NOTIFICATIONS is runtime-revocable: skip the update
                         // when denied (counting continues, only the shade goes stale).
                         val allowed = ContextCompat.checkSelfPermission(

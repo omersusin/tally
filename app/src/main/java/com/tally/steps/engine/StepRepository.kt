@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import androidx.room.withTransaction
@@ -26,6 +27,14 @@ class StepRepository private constructor(
 ) {
     private val dao = db.dayDao()
     private val mutex = Mutex()
+
+    // Active minutes: in-memory minute buckets only, persisted count only.
+    // minuteId = wallClockMs / 60_000. Reboot/process death loses the buckets,
+    // so partial-minute progress toward the threshold is lost and that minute
+    // under-counts. Honest direction (never phantom), accepted.
+    private val minuteSteps = mutableMapOf<Long, Long>()
+    private val countedMinutes = mutableSetOf<Long>()
+    private var activeDayEpoch: Long = -1L
 
     // ---- Public API (keep signatures stable) ----
 
@@ -67,6 +76,36 @@ class StepRepository private constructor(
 
     fun paused(): Flow<Boolean> = prefs.paused
 
+    /**
+     * Sensitivity meaning (the stored L/M/H finally means something concrete):
+     * minimum steps within one clock minute for that minute to count as an
+     * active minute. L=100 (only brisk sustained walking), M=60 (~1 step/s
+     * average), H=30 (gentle movement counts). It never touches the hardware
+     * counter — it only gates the active-minute count. Also exposed for
+     * workout auto-break tuning (another agent owns that consumer).
+     */
+    fun sensitivityThreshold(): Flow<Int> = prefs.sensitivity.map { thresholdFor(it) }
+
+    /**
+     * One-way HC auto-sync latch: engages only while the HC read grant is held;
+     * once latched it persists — a later revoke only pauses syncing
+     * ([syncHealth] returns early) and never clears the flag; the user turns
+     * it off in Settings. Returns whether the latch engaged.
+     */
+    suspend fun latchHcAuto(): Boolean = mutex.withLock {
+        if (hc.hasPermissions(app)) {
+            prefs.setHcAuto(true)
+            true
+        } else {
+            false
+        }
+    }
+
+    /** User toggle for auto-sync, including OFF. The latch above is the only path to true-with-grant. */
+    suspend fun setHcAuto(v: Boolean) = prefs.setHcAuto(v)
+
+    fun hcAuto(): Flow<Boolean> = prefs.hcAuto
+
     /** True when the device reports a hardware step counter. Never null, never throws. */
     fun hasSensor(): Flow<Boolean> = flow {
         emit(
@@ -107,6 +146,7 @@ class StepRepository private constructor(
     /** One raw TYPE_STEP_COUNTER cumulative value. Handles reboot + rollover. */
     suspend fun onSensor(counter: Long) = mutex.withLock {
         val t = todayEpoch()
+        val nowMs = now()
         val baseline = prefs.baseline.first()
         // Baseline-first order is deliberate: a crash between the baseline write
         // and the day upsert loses at most one delta (under-count, honest). The
@@ -114,19 +154,35 @@ class StepRepository private constructor(
         // steps). Under-count chosen; never phantom.
         if (baseline < 0 || counter < baseline) {
             // First reading ever, post-boot, or reboot (counter restarted):
-            // rebaseline, count nothing, keep Day.steps.
-            prefs.setBaselineAndSensorAt(counter, now())
+            // rebaseline, count nothing, keep Day.steps. The in-flight minute's
+            // partial progress is also lost here (buckets below are untouched),
+            // so a reboot minute under-counts by design.
+            prefs.setBaselineAndSensorAt(counter, nowMs)
             ensureToday(t)
             return@withLock
         }
         val delta = counter - baseline
-        prefs.setBaselineAndSensorAt(counter, now())
+        prefs.setBaselineAndSensorAt(counter, nowMs)
         if (prefs.paused.first() || delta <= 0) {
             ensureToday(t)
             return@withLock
         }
+        if (t != activeDayEpoch) {
+            // Day rolled: yesterday's buckets can never complete, drop them.
+            minuteSteps.clear()
+            countedMinutes.clear()
+            activeDayEpoch = t
+        }
         val cur = dao.getDay(t) ?: blank(t)
-        dao.upsert(estimates(cur.copy(steps = (cur.steps + delta).coerceAtMost(MAX_STEPS.toLong()).toInt())))
+        dao.upsert(
+            estimates(
+                cur.copy(
+                    steps = (cur.steps + delta).coerceAtMost(MAX_STEPS.toLong()).toInt(),
+                    activeMin = countActiveMinute(nowMs, delta, cur.activeMin),
+                    source = sourceFor(cur.source),
+                ),
+            ),
+        )
     }
 
     /** Idempotent: call on every worker tick and date/timezone change. */
@@ -135,10 +191,15 @@ class StepRepository private constructor(
     suspend fun onDateOrZoneChanged() = rolloverCheck()
 
     /**
-     * Health Connect sync, hcMode-gated. Merge is max() (reads never overwrite a
+     * Health Connect sync, hcMode/hcAuto-gated. Merge is max() (reads never overwrite a
      * larger sensor value) and only after a sensor gap; write-back is sensor
      * delta only, manual excluded. Write-back runs in RW mode with the write
      * grant only — without it we skip (honest: no fake sync), we never throw.
+     *
+     * Auto-sync latch: proceeds when hcMode != OFF *or* hcAuto is latched, so a
+     * latched user keeps background gap-fill even with mode OFF. A missing read
+     * grant only skips the run — it never clears hcAuto (one-way latch). With
+     * mode OFF + auto, only reads run; write-back still needs mode RW.
      *
      * Merged-write misattribution limitation: row.steps can include steps
      * gap-filled from OTHER apps' HC records, so write-back re-attributes those
@@ -148,7 +209,9 @@ class StepRepository private constructor(
      */
     suspend fun syncHealth() {
         val mode = prefs.hcMode.first()
-        if (mode == "OFF" || !hc.hasPermissions(app)) return
+        val auto = prefs.hcAuto.first()
+        if (mode == "OFF" && !auto) return
+        if (!hc.hasPermissions(app)) return // revoke pauses sync; latch untouched
         mutex.withLock {
             val t = todayEpoch()
             val today = LocalDate.now()
@@ -168,14 +231,56 @@ class StepRepository private constructor(
 
     // ---- Internals ----
 
+    /**
+     * Active-minute gate: accumulates this event's delta into its clock-minute
+     * bucket; the minute counts once its total reaches the sensitivity
+     * threshold. Steps always count; only the minute may not. HC gap-fill and
+     * restore never route through here (we know no minutes for their steps),
+     * so those paths keep the persisted count untouched.
+     */
+    private suspend fun countActiveMinute(nowMs: Long, delta: Long, persisted: Int): Int {
+        val threshold = thresholdFor(prefs.sensitivity.first())
+        val id = nowMs / 60_000L
+        if (minuteSteps.size > 240) {
+            // Bound memory: drop buckets older than ~3h (a day has 1440 min max).
+            minuteSteps.keys.filter { it < id - 180 }.forEach {
+                minuteSteps.remove(it)
+                countedMinutes.remove(it)
+            }
+        }
+        val acc = (minuteSteps[id] ?: 0L) + delta
+        minuteSteps[id] = acc
+        return if (acc >= threshold && countedMinutes.add(id)) {
+            (persisted + 1).coerceAtMost(1440)
+        } else {
+            persisted
+        }
+    }
+
+    private fun thresholdFor(sensitivity: String): Int = when (sensitivity) {
+        "L" -> ACTIVE_THRESHOLD_L
+        "H" -> ACTIVE_THRESHOLD_H
+        else -> ACTIVE_THRESHOLD_M
+    }
+
+    /**
+     * Treadmill wiring: when the user flagged treadmill mode, sensor-path rows
+     * are labelled source="treadmill" (distance already = steps*stepLen via
+     * estimates, verified not changed). Restore/HC paths keep their own source
+     * — this labels only what the sensor recorded while the flag was on.
+     * GPS-filter skip lives in WorkoutTracker (another agent).
+     */
+    private suspend fun sourceFor(fallback: String): String =
+        if (prefs.treadmill.first()) "treadmill" else fallback
+
     private suspend fun ensureToday(t: Long) {
         if (dao.getDay(t) == null) dao.upsert(blank(t))
     }
 
     private suspend fun blank(t: Long): Day =
-        Day(t, 0, 0f, 0f, 0, prefs.goal.first(), 0, "sensor", now())
+        Day(t, 0, 0f, 0f, 0, prefs.goal.first(), 0, sourceFor("sensor"), now())
 
-    /** distance = total steps * stride; kcal = steps * 0.04 * (kg/70). */
+    /** distance = total steps * stride; kcal = steps * 0.04 * (kg/70). activeMin intentionally preserved. */
     private suspend fun estimates(d: Day): Day {
         val stepLenM = prefs.stepLenCm.first() / 100f
         val kg = prefs.weightKg.first()
@@ -197,6 +302,10 @@ class StepRepository private constructor(
         private const val GAP_MS = 30 * 60 * 1000L
         /** Absurd manual corrections are rejected at CSV parse; this is the last-resort clamp. */
         private const val MANUAL_DELTA_ABS_MAX = 100_000
+        /** Active-minute step thresholds per sensitivity (see sensitivityThreshold). */
+        private const val ACTIVE_THRESHOLD_L = 100
+        private const val ACTIVE_THRESHOLD_M = 60
+        private const val ACTIVE_THRESHOLD_H = 30
 
         @Volatile
         private var instance: StepRepository? = null

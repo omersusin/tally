@@ -89,6 +89,38 @@ fun HistoryScreen(
         detail?.let { DayDetail(it) }
 
         StreakSummary(days = allDays)
+
+        WorkoutHistory()
+    }
+}
+
+@Composable
+private fun WorkoutHistory(
+    vm: HistoryViewModel = viewModel(),
+) {
+    val workouts by vm.workouts.collectAsStateWithLifecycle()
+    if (workouts.isEmpty()) return
+    val fmt = NumberFormat.getIntegerInstance()
+    val zone = ZoneId.systemDefault()
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(text = "Workouts", style = MaterialTheme.typography.titleMedium)
+            workouts.take(10).forEach { w ->
+                val date = Instant.ofEpochMilli(w.startMs).atZone(zone).toLocalDate()
+                    .format(DateTimeFormatter.ofPattern("EEE, MMM d"))
+                val mins = ((w.endMs - w.startMs - w.pausedMs) / 60_000L).coerceAtLeast(0)
+                Text(
+                    text = "$date · ${w.type} · ${fmt.format(w.steps)} steps · " +
+                        "${"%.1f".format(w.distanceM / 1000f)} km · $mins min" +
+                        if (w.gpsPolyline == null) " · no map" else "",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 

@@ -27,7 +27,9 @@ Migration: NEVER `fallbackToDestructiveMigration()`; real `Migration(1→2…)` 
 - Day-roll: check `epochDay` on every event + WM tick + `ACTION_DATE_CHANGED`; freeze yesterday, set `baseline=counter`, start Day with `manualDelta` carried=0.
 - HC merge (no double-count): `total = max(sensorDay, hcDay_exclOurs) + manualDelta`; `hcDay_exclOurs` filters `metadata.dataOrigin=ours`; write-back only sensor delta with our session; sensor gap (>30min no event) → HC fills gap only.
 - One-way AUTO latch: S06 toggle default OFF; once granted+enabled `hcAuto=true` persists; never auto-off on revoke — user must toggle; reads never overwrite larger sensor value.
-- Sensitivity: `L/M/H` → cadence gate `12/8/4s` + min-burst `10/6/2` steps; filters accel-fallback + workout cadence only, never rewrites HW counter.
+- Sensitivity: `L/M/H` → active-minute step threshold (100/60/30 steps within the
+  minute to count it active) + workout auto-break tuning. Steps ALWAYS count;
+  only the active-minute classification changes. Never touches the HW counter.
 - Treadmill: `treadmill=true` → no GPS, `Workout.type=treadmill`, distance=`steps*stepLenCm`, GPS drift filter skipped, source=`treadmill`.
 - Manual edit: S02 edit writes only `Day.manualDelta` (+/-) with audit `updatedAt`; delete zeroes it; never touches `baseline`; excluded from HC write-back, included in export.
 

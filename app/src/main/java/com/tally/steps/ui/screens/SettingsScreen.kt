@@ -1,5 +1,6 @@
 package com.tally.steps.ui.screens
 
+import android.app.Application
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -36,6 +37,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,7 +47,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.tally.steps.export.PdfExport
 import com.tally.steps.ui.settings.SettingsViewModel
+import com.tally.steps.ui.workout.EngineBridge
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 private val MinTouch = Modifier.heightIn(min = 48.dp)
 
@@ -70,6 +76,17 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     val busy by vm.busy.collectAsState()
     val message by vm.message.collectAsState()
     val batteryAsked by vm.batteryAsked.collectAsState()
+
+    // hcAuto + PDF export bypass SettingsViewModel (engine-owned prefs/repo
+    // read directly so no other Settings wiring changes).
+    val app = context.applicationContext as Application
+    val repo = remember(app) { EngineBridge.stepRepository(app) }
+    val prefs = remember(app) { EngineBridge.prefsStore(app) }
+    val hcAuto by prefs.hcAuto.collectAsState(initial = false)
+    val scope = rememberCoroutineScope()
+    var hcAutoNote by remember { mutableStateOf<String?>(null) }
+    var pdfNote by remember { mutableStateOf<String?>(null) }
+    var pdfBusy by remember { mutableStateOf(false) }
 
     val restoreLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -216,18 +233,59 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
 
         Section("Health Connect") {
             ToggleRow(
-                title = "Sync with Health Connect",
-                subtitle = when (hcMode) {
-                    "OFF" -> "Off. Tally reads and writes nothing."
-                    "R" -> "Read only: fills gaps when your phone was off or in a locker."
-                    else -> "Read and write: also shares Tally's count with other apps."
+                title = "Read steps from Health Connect",
+                subtitle = if (hcMode != "OFF") {
+                    "On: fills gaps when your phone was off or in a locker. " +
+                        "Never overwrites a larger count on this phone."
+                } else {
+                    "Off. Tally reads nothing."
                 },
                 checked = hcMode != "OFF",
-                onChecked = { vm.setHcMode(if (it) "R" else "OFF") },
+                onChecked = { on -> vm.setHcMode(if (on) "R" else "OFF") },
             )
+            ToggleRow(
+                title = "Share steps with Health Connect",
+                subtitle = if (hcMode == "RW") {
+                    "On: other apps can read Tally's count."
+                } else {
+                    "Off. Nothing leaves Tally."
+                },
+                checked = hcMode == "RW",
+                onChecked = { on -> vm.setHcMode(if (on) "RW" else "R") },
+            )
+            ToggleRow(
+                title = "Auto sync in background",
+                subtitle = "Once on and permission is granted, it stays on — " +
+                    "even if you later remove the permission in Health Connect. " +
+                    "Turn it off here to stop.",
+                checked = hcAuto,
+                onChecked = { on ->
+                    if (!on) {
+                        scope.launch { runCatching { repo.setHcAuto(false) } }
+                    } else {
+                        scope.launch {
+                            val ok = runCatching { repo.latchHcAuto() }.getOrDefault(false)
+                            hcAutoNote = if (ok) {
+                                null
+                            } else {
+                                "Health Connect permission is not granted yet, " +
+                                    "so auto sync was not turned on."
+                            }
+                        }
+                    }
+                },
+            )
+            hcAutoNote?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
-                "Off until you turn it on. Turning it on never deletes anything, " +
-                    "and turning it off stops all syncing immediately.",
+                "All three are off until you turn them on. Turning read or share " +
+                    "on never deletes anything, and turning them off stops all " +
+                    "syncing immediately.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -265,6 +323,33 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth().then(MinTouch),
             ) { Text("Export steps as CSV") }
+            OutlinedButton(
+                onClick = {
+                    pdfBusy = true
+                    pdfNote = null
+                    scope.launch {
+                        try {
+                            val days = runCatching { repo.history(365).first() }
+                                .getOrDefault(emptyList())
+                            val file = PdfExport.exportDays(context, days)
+                            pdfNote = "Summary saved to ${file.name} in the Tally folder."
+                        } catch (e: Exception) {
+                            pdfNote = "PDF export failed (${e.message})."
+                        } finally {
+                            pdfBusy = false
+                        }
+                    }
+                },
+                enabled = !busy && !pdfBusy,
+                modifier = Modifier.fillMaxWidth().then(MinTouch),
+            ) { Text("Export summary as PDF") }
+            pdfNote?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             OutlinedButton(
                 onClick = vm::backup,
                 enabled = !busy,

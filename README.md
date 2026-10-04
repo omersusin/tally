@@ -13,7 +13,7 @@ Offline-first, open-source Android step counter. No ads. No account. No tracking
 
 ## Privacy
 
-No `INTERNET` permission. No ads, analytics, or trackers. Backup, export, and Health Connect sync only happen when you tap them. `allowBackup=false`; delete = clear app data.
+No ads, analytics, or trackers. Backup, export, and Health Connect sync only happen when you tap them. `allowBackup=false`; delete = clear app data. The single network use is map tiles during workouts (the `INTERNET` permission) — step counting, GPS tracking, and backup work fully offline.
 
 ## Build
 

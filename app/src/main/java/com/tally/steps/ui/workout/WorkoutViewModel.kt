@@ -4,14 +4,21 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tally.steps.data.PrefsStore
+import com.tally.steps.data.TallyDatabase
+import com.tally.steps.data.Workout
 import com.tally.steps.engine.StepRepository
+import com.tally.steps.engine.TrackPoint
+import com.tally.steps.engine.WorkoutTracker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 /**
  * Access to the engine singletons.
@@ -99,8 +106,8 @@ data class WorkoutUiState(
     val lastSummary: WorkoutSummary? = null,
     /** Honest note about where the summary was saved. */
     val saveNote: String? = null,
-    /** True when the engine exposes startWorkout/finishWorkout. */
-    val historySupported: Boolean = false,
+    /** Always true now: summaries persist to the Workout table. */
+    val historySupported: Boolean = true,
 ) {
     enum class Phase { IDLE, ACTIVE, PAUSED, DONE }
 }
@@ -108,14 +115,26 @@ data class WorkoutUiState(
 /**
  * S04 session state machine. Steps come from [StepRepository.today] so the
  * workout never double-counts: session steps = today.steps - baseline.
- * Distance is a step-length estimate (treadmill: steps only, no GPS).
+ * The summary persists to the Workout table (visible via [workouts]); the
+ * sensor already counted these steps in today's total, so nothing is added
+ * via adjustManual — that would double-count. Distance is a step-length
+ * estimate (treadmill: steps only, no GPS, source=treadmill via type).
  */
 class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
     private val repo: StepRepository = EngineBridge.stepRepository(app)
     private val prefs: PrefsStore = EngineBridge.prefsStore(app)
+    private val workoutDao = TallyDatabase.getInstance(app).workoutDao()
+    private val tracker = WorkoutTracker()
 
     private val _ui = MutableStateFlow(WorkoutUiState())
     val ui: StateFlow<WorkoutUiState> = _ui.asStateFlow()
+
+    /** Live GPS fixes (filtered per arch §5); drives WorkoutMap + polyline. */
+    val trackPoints: StateFlow<List<TrackPoint>> = tracker.pointsFlow
+
+    /** Persisted workout history, newest first. */
+    val workouts: StateFlow<List<Workout>> = workoutDao.workoutsFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private var ticker: Job? = null
     private var baselineSteps = 0
@@ -123,18 +142,36 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
     private var activeSinceMs = 0L
     private var lastProgressSteps = 0
     private var lastProgressAtMs = 0L
-    private var engineHistory = false
 
     fun setConfig(config: WorkoutConfig) {
         if (_ui.value.phase == WorkoutUiState.Phase.IDLE ||
             _ui.value.phase == WorkoutUiState.Phase.DONE
         ) {
-            _ui.value = _ui.value.copy(config = config, saveNote = null, lastSummary = null)
+            val clean = if (!config.type.usesGps) config.copy(gpsAvailable = false) else config
+            _ui.value = _ui.value.copy(config = clean, saveNote = null, lastSummary = null)
         }
     }
 
+    /** Called by the permission launcher in WorkoutScreen; safe mid-session. */
+    fun setGpsAvailable(available: Boolean) {
+        val s = _ui.value
+        val v = available && s.config.type.usesGps
+        if (s.config.gpsAvailable != v) {
+            _ui.value = s.copy(config = s.config.copy(gpsAvailable = v))
+        }
+    }
+
+    /** Raw GPS fix from WorkoutMap; the tracker applies the arch §5 filter. */
+    fun onLocation(lat: Double, lon: Double, accuracyM: Float) {
+        val s = _ui.value
+        if (s.phase != WorkoutUiState.Phase.ACTIVE) return
+        if (!s.config.gpsAvailable || !s.config.type.usesGps) return
+        tracker.onLocation(lat, lon, System.currentTimeMillis(), accuracyM)
+    }
+
     fun quickStart(type: WorkoutType) {
-        setConfig(WorkoutConfig(type = type, targetKind = TargetKind.FREE))
+        val keepGps = type.usesGps && _ui.value.config.gpsAvailable
+        setConfig(WorkoutConfig(type = type, targetKind = TargetKind.FREE, gpsAvailable = keepGps))
         start()
     }
 
@@ -148,7 +185,7 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
             lastProgressAtMs = now
             sessionStartMs = now
             activeSinceMs = now
-            engineHistory = tryStartWorkout(_ui.value.config.type, now)
+            tracker.start(now)
             _ui.value = _ui.value.copy(
                 phase = WorkoutUiState.Phase.ACTIVE,
                 sessionSteps = 0,
@@ -159,7 +196,7 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
                 targetFraction = null,
                 targetHit = false,
                 saveNote = null,
-                historySupported = engineHistory,
+                historySupported = true,
             )
             startTicker()
         }
@@ -169,6 +206,7 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
         val s = _ui.value
         if (s.phase != WorkoutUiState.Phase.ACTIVE) return
         ticker?.cancel()
+        tracker.pause(System.currentTimeMillis())
         _ui.value = s.copy(phase = WorkoutUiState.Phase.PAUSED, autoPaused = byAutoBreak)
     }
 
@@ -176,6 +214,7 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
         val s = _ui.value
         if (s.phase != WorkoutUiState.Phase.PAUSED) return
         val now = System.currentTimeMillis()
+        tracker.resume(now)
         _ui.value = s.copy(
             phase = WorkoutUiState.Phase.ACTIVE,
             pausedMs = s.pausedMs + (now - activeSinceMs).coerceAtLeast(0L),
@@ -194,6 +233,12 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
         ticker?.cancel()
         viewModelScope.launch {
             val now = System.currentTimeMillis()
+            // Finishing while paused: include the trailing paused stretch.
+            val pausedMs = if (s.phase == WorkoutUiState.Phase.PAUSED) {
+                s.pausedMs + (now - activeSinceMs).coerceAtLeast(0L)
+            } else {
+                s.pausedMs
+            }
             val steps = s.sessionSteps
             val distM = s.distanceM
             val summary = WorkoutSummary(
@@ -201,18 +246,19 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
                 startMs = sessionStartMs,
                 endMs = now,
                 elapsedMs = s.elapsedMs,
-                pausedMs = s.pausedMs,
+                pausedMs = pausedMs,
                 steps = steps,
                 distanceM = distM,
                 targetHit = s.targetHit,
             )
-            val note = persistSummary(summary)
+            val note = persistSummary(summary, tracker.polylineString())
             _ui.value = s.copy(phase = WorkoutUiState.Phase.DONE, lastSummary = summary, saveNote = note)
         }
     }
 
     fun reset() {
         ticker?.cancel()
+        tracker.clear()
         _ui.value = WorkoutUiState(config = _ui.value.config)
     }
 
@@ -235,6 +281,7 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
                 if (session > lastProgressSteps) {
                     lastProgressSteps = session
                     lastProgressAtMs = now
+                    tracker.onSteps(now)
                 }
                 val fraction = targetFraction(s.config, session, distM, elapsed)
                 val hit = fraction != null && fraction >= 1f
@@ -264,43 +311,27 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     /**
-     * Best-effort call to the engine's workout history API
-     * (assumed: startWorkout(type: String, startMs: Long)).
-     * Returns true only if the engine actually has it.
+     * Persists the summary to the Workout table. Sensor-delta attribution
+     * only — never adjustManual (that would double-count today's total).
      */
-    private fun tryStartWorkout(type: WorkoutType, startMs: Long): Boolean = runCatching {
-        val m = repo.javaClass.methods.firstOrNull {
-            it.name == "startWorkout" && it.parameterTypes.size == 2
-        } ?: return false
-        m.invoke(repo, type.name, startMs)
-        true
-    }.getOrDefault(false)
-
-    /**
-     * Saves the summary. Prefers the engine Workout row
-     * (assumed: finishWorkout(type, startMs, endMs, steps, distanceM));
-     * otherwise the summary is display-only — the sensor already counted
-     * these steps in today's total, so nothing is added. Never calls
-     * adjustManual here (that would double-count).
-     */
-    private suspend fun persistSummary(summary: WorkoutSummary): String {
-        val viaHistory = runCatching {
-            val m = repo.javaClass.methods.firstOrNull {
-                it.name == "finishWorkout" && it.parameterTypes.size == 5
-            } ?: return@runCatching false
-            m.invoke(
-                repo,
-                summary.type.name,
-                summary.startMs,
-                summary.endMs,
-                summary.steps,
-                summary.distanceM,
+    private suspend fun persistSummary(summary: WorkoutSummary, polyline: String?): String {
+        return runCatching {
+            workoutDao.insert(
+                Workout(
+                    id = UUID.randomUUID().toString(),
+                    type = summary.type.name.lowercase(),
+                    startMs = summary.startMs,
+                    endMs = summary.endMs,
+                    steps = summary.steps,
+                    distanceM = summary.distanceM,
+                    pausedMs = summary.pausedMs,
+                    gpsPolyline = polyline,
+                ),
             )
-            true
-        }.getOrDefault(false)
-        _ui.value = _ui.value.copy(historySupported = viaHistory || engineHistory)
-        if (viaHistory) return "Saved to your workout history."
-        return "Shown here only — these ${summary.steps} steps are already " +
-            "in today's count from the sensor, so nothing extra was added."
+            "Saved to your workout history."
+        }.getOrElse {
+            "Couldn't save this workout — ${summary.steps} steps are still " +
+                "in today's count from the sensor, so nothing was lost."
+        }
     }
 }

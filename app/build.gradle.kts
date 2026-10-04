@@ -95,4 +95,7 @@ dependencies {
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // Workout map (FOSS, Apache-2.0 — OpenTracks/RunnerUp pattern)
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
 }

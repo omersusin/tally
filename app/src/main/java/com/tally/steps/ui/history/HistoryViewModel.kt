@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tally.steps.TallyApp
 import com.tally.steps.data.Day
+import com.tally.steps.data.TallyDatabase
+import com.tally.steps.data.Workout
 import com.tally.steps.engine.StepRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,4 +29,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setLimit(n: Int) {
         limit.value = n.coerceIn(1, 90)
     }
+
+    val workouts: StateFlow<List<Workout>> =
+        TallyDatabase.getInstance(application).workoutDao().workoutsFlow()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 }

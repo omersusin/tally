@@ -1,5 +1,10 @@
 package com.tally.steps.ui.screens
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -31,11 +36,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.tally.steps.ui.components.WorkoutMap
 import com.tally.steps.ui.workout.TargetKind
 import com.tally.steps.ui.workout.WorkoutConfig
 import com.tally.steps.ui.workout.WorkoutType
@@ -44,17 +52,42 @@ import com.tally.steps.ui.workout.WorkoutViewModel
 
 private val MinTouch = Modifier.heightIn(min = 48.dp)
 
+private fun hasWorkoutLocation(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_FINE_LOCATION,
+    ) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_COARSE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+
 /**
  * S04 workout. Start takes at most 2 taps (pick type, tap Start — or 1 tap
- * via "Start free walk"). All types run step-only for now.
+ * via "Start free walk"). GPS types record a live route when location is
+ * granted; denied (or treadmill) falls back to step-only — honestly labelled.
  */
 @Composable
 fun WorkoutScreen(vm: WorkoutViewModel = viewModel()) {
     val ui by vm.ui.collectAsState()
+    val points by vm.trackPoints.collectAsState()
+    val context = LocalContext.current
+    var locGranted by remember { mutableStateOf(hasWorkoutLocation(context)) }
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { result ->
+        val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            result[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+            hasWorkoutLocation(context)
+        locGranted = granted
+        vm.setGpsAvailable(granted)
+    }
 
-    // Step-only: no location permission (GPS arrives later). Type switch only.
     fun setType(type: WorkoutType) {
-        vm.setConfig(ui.config.copy(type = type, gpsAvailable = false))
+        vm.setConfig(
+            ui.config.copy(
+                type = type,
+                gpsAvailable = type.usesGps && (locGranted || hasWorkoutLocation(context)),
+            ),
+        )
     }
 
     Column(
@@ -67,7 +100,25 @@ fun WorkoutScreen(vm: WorkoutViewModel = viewModel()) {
         when (ui.phase) {
             WorkoutUiState.Phase.IDLE, WorkoutUiState.Phase.DONE -> {
                 if (ui.phase == WorkoutUiState.Phase.DONE && ui.lastSummary != null) {
-                    SummaryCard(ui = ui, onDismiss = vm::reset)
+                    SummaryCard(ui = ui, gpsPoints = points.size, onDismiss = vm::reset)
+                }
+                if (ui.config.type.usesGps && !ui.config.gpsAvailable) {
+                    GpsCard(
+                        granted = locGranted,
+                        onEnable = {
+                            if (hasWorkoutLocation(context)) {
+                                locGranted = true
+                                vm.setGpsAvailable(true)
+                            } else {
+                                launcher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                                    ),
+                                )
+                            }
+                        },
+                    )
                 }
                 ConfigCard(
                     config = ui.config,
@@ -94,7 +145,21 @@ fun WorkoutScreen(vm: WorkoutViewModel = viewModel()) {
                 )
             }
             WorkoutUiState.Phase.ACTIVE, WorkoutUiState.Phase.PAUSED -> {
-                ActiveCard(ui = ui)
+                ActiveCard(ui = ui, gpsPoints = points.size)
+                if (ui.config.gpsAvailable && ui.config.type.usesGps) {
+                    WorkoutMap(
+                        points = points,
+                        active = ui.phase == WorkoutUiState.Phase.ACTIVE,
+                        onLocation = { lat, lon, acc -> vm.onLocation(lat, lon, acc) },
+                    )
+                } else if (ui.config.type.usesGps) {
+                    Text(
+                        text = "Step-only: location denied. Grant it before your next " +
+                            "workout to record a route.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (ui.phase == WorkoutUiState.Phase.ACTIVE) {
                     Button(
                         onClick = { vm.pause() },
@@ -118,6 +183,34 @@ fun WorkoutScreen(vm: WorkoutViewModel = viewModel()) {
                     onClick = { vm.finish() },
                     modifier = Modifier.fillMaxWidth().then(MinTouch),
                 ) { Text("Finish") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GpsCard(granted: Boolean, onEnable: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Route tracking", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = if (granted) {
+                    "Location granted — your route records with this workout."
+                } else {
+                    "Allow location to draw your route. Without it this " +
+                        "workout still counts steps, just no map."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (!granted) {
+                Button(
+                    onClick = onEnable,
+                    modifier = Modifier.fillMaxWidth().then(MinTouch),
+                ) { Text("Enable GPS route") }
             }
         }
     }
@@ -160,7 +253,13 @@ private fun ConfigCard(
                 )
             } else {
                 Text(
-                    text = "Distance comes from your step length. GPS tracking arrives later.",
+                    text = if (config.gpsAvailable) {
+                        "GPS route on. Bad fixes (accuracy over 20 m, jumps " +
+                            "faster than 3.5 m/s) are dropped automatically."
+                    } else {
+                        "Step-only until location is allowed. " +
+                            "Distance comes from your step length."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -247,7 +346,7 @@ private fun NumberField(label: String, value: String, onValue: (Int?) -> Unit) {
 }
 
 @Composable
-private fun ActiveCard(ui: WorkoutUiState) {
+private fun ActiveCard(ui: WorkoutUiState, gpsPoints: Int) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -267,6 +366,14 @@ private fun ActiveCard(ui: WorkoutUiState) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (ui.config.gpsAvailable && ui.config.type.usesGps) {
+                Text(
+                    text = if (gpsPoints > 0) "$gpsPoints GPS points on the route."
+                    else "Waiting for GPS lock… steps still count.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             val frac = ui.targetFraction
             if (frac != null) {
                 LinearProgressIndicator(
@@ -290,7 +397,7 @@ private fun ActiveCard(ui: WorkoutUiState) {
 }
 
 @Composable
-private fun SummaryCard(ui: WorkoutUiState, onDismiss: () -> Unit) {
+private fun SummaryCard(ui: WorkoutUiState, gpsPoints: Int, onDismiss: () -> Unit) {
     val s = ui.lastSummary ?: return
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -304,6 +411,13 @@ private fun SummaryCard(ui: WorkoutUiState, onDismiss: () -> Unit) {
                     if (s.pausedMs > 0) " (${formatTime(s.pausedMs)} paused)" else "" + ".",
                 style = MaterialTheme.typography.bodyMedium,
             )
+            if (gpsPoints >= 2) {
+                Text(
+                    text = "Route saved with $gpsPoints GPS points.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (s.targetHit) Text("You hit your target.")
             ui.saveNote?.let {
                 Text(
