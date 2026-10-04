@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.tally.steps"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.tally.steps"
