@@ -1,8 +1,8 @@
 package com.tally.steps.widget
 
 import android.app.Application
+import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -60,9 +60,7 @@ class TallyWidget : GlanceAppWidget() {
         val steps = currentState(CountKey) ?: -1
         val goal = currentState(GoalKey) ?: 6000
         val openApp = actionStartActivity(
-            Intent(LocalContext.current, MainActivity::class.java).apply {
-                action = Intent.ACTION_MAIN
-            },
+            ComponentName(LocalContext.current, MainActivity::class.java),
         )
         Column(
             modifier = GlanceModifier

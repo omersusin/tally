@@ -6,7 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tally.steps.data.Day
 import com.tally.steps.export.BackupExport
-import com.tally.steps.export.RestoreOutcome
+import com.tally.steps.export.BackupExport.RestoreOutcome
 import com.tally.steps.ui.workout.EngineBridge
 import java.io.File
 import kotlinx.coroutines.flow.Flow
