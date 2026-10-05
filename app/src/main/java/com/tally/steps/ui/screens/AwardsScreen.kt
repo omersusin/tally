@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,6 +27,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tally.steps.data.Day
 import com.tally.steps.engine.GoalCoach
+import com.tally.steps.ui.theme.TallyElevation
+import com.tally.steps.ui.theme.tabulated
 import com.tally.steps.ui.workout.EngineBridge
 import java.time.LocalDate
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -199,15 +202,15 @@ fun AwardsScreen(vm: AwardsViewModel = viewModel()) {
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         StreakCard(info = ui.streak)
-        Text("Badges", style = MaterialTheme.typography.titleMedium)
+        Text("Badges", style = MaterialTheme.typography.titleLarge)
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 2000.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             userScrollEnabled = false,
         ) {
             items(ui.badges, key = { it.id }) { badge -> BadgeCard(badge = badge) }
@@ -223,7 +226,10 @@ fun AwardsScreen(vm: AwardsViewModel = viewModel()) {
 
 @Composable
 private fun StreakCard(info: StreakInfo) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.CardRaised),
+    ) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -235,7 +241,7 @@ private fun StreakCard(info: StreakInfo) {
                 Text(info.status.label, style = MaterialTheme.typography.titleMedium)
                 Text(
                     text = if (info.days > 0) "${info.days} day${if (info.days == 1) "" else "s"}" else "—",
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.headlineSmall.tabulated(),
                 )
             }
             Text(
@@ -249,23 +255,49 @@ private fun StreakCard(info: StreakInfo) {
 
 @Composable
 private fun BadgeCard(badge: Badge) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    // Locked = quiet: flat tonal surface, muted text. Unlocked = warm:
+    // raised card with the state mark in accent. State is always text,
+    // never color alone — the mark and label strings are unchanged.
+    val unlocked = badge.state != BadgeState.LOCKED
+    val titleColor = when (badge.state) {
+        BadgeState.LOCKED -> MaterialTheme.colorScheme.onSurfaceVariant
+        BadgeState.NEW -> MaterialTheme.colorScheme.primary
+        BadgeState.UNLOCKED -> MaterialTheme.colorScheme.onSurface
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = if (unlocked) {
+            CardDefaults.cardColors()
+        } else {
+            CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            )
+        },
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (unlocked) TallyElevation.Card else 0.dp,
+        ),
+    ) {
         Column(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
                 text = "${badge.state.mark} ${badge.name}",
                 style = MaterialTheme.typography.titleSmall,
+                color = titleColor,
             )
             Text(
                 text = badge.state.label,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (unlocked) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
             Text(
                 text = badge.how,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodySmall.tabulated(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

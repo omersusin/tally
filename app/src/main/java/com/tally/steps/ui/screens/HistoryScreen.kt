@@ -11,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -33,6 +34,8 @@ import com.tally.steps.ui.components.BarChart
 import com.tally.steps.ui.components.HistoryRange
 import com.tally.steps.ui.components.RangeSwitch
 import com.tally.steps.ui.history.HistoryViewModel
+import com.tally.steps.ui.theme.TallyElevation
+import com.tally.steps.ui.theme.tabulated
 import com.tally.steps.ui.workout.EngineBridge
 import java.text.NumberFormat
 import java.time.Instant
@@ -83,7 +86,7 @@ fun HistoryScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         RangeSwitch(
             selected = range,
@@ -93,7 +96,14 @@ fun HistoryScreen(
             },
         )
 
-        BarChart(days = visible)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                BarChart(days = visible)
+            }
+        }
 
         detail?.let { DayDetail(it) }
 
@@ -111,7 +121,10 @@ private fun WorkoutHistory(
     if (workouts.isEmpty()) return
     val fmt = NumberFormat.getIntegerInstance()
     val zone = ZoneId.systemDefault()
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
+    ) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -125,7 +138,7 @@ private fun WorkoutHistory(
                     text = "$date · ${w.type} · ${fmt.format(w.steps)} steps · " +
                         "${"%.1f".format(w.distanceM / 1000f)} km · $mins min" +
                         if (w.gpsPolyline == null) " · no map" else "",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.tabulated(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -149,7 +162,10 @@ private fun DayDetail(day: Day) {
     // button stays hidden — no dead buttons, no nag.
     val restEligible = !day.restDay && day.epochDay < todayEpoch &&
         day.goal > 0 && day.steps < day.goal
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
+    ) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -157,12 +173,12 @@ private fun DayDetail(day: Day) {
             Text(text = date, style = MaterialTheme.typography.titleMedium)
             Text(
                 text = "${fmt.format(day.steps)} steps of ${fmt.format(day.goal)} goal",
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyLarge.tabulated(),
             )
             Text(
                 text = "${"%.1f".format(day.distanceM / 1000f)} km · " +
                     "${day.kcal.toInt()} kcal · ${day.activeMin} min active",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodyMedium.tabulated(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (day.manualDelta != 0) {
@@ -218,11 +234,14 @@ private fun StreakSummary(days: List<Day>) {
     } else {
         ""
     }
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
+    ) {
         Text(
             text = if (run > 0) "$run-day streak. Steady walking.$restNote"
             else "No streak yet — every walk counts.",
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodyLarge.tabulated(),
             modifier = Modifier.padding(16.dp),
         )
     }

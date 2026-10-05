@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -46,12 +48,15 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tally.steps.ui.components.GiantCount
 import com.tally.steps.ui.components.GoalRing
 import com.tally.steps.ui.components.StatRow
+import com.tally.steps.ui.theme.TallyElevation
+import com.tally.steps.ui.theme.tabulated
 import com.tally.steps.ui.today.TodayViewModel
 import com.tally.steps.ui.workout.EngineBridge
 import com.tally.steps.engine.GoalCoach
@@ -103,7 +108,7 @@ fun TodayScreen(
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         GiantCount(steps = current.steps, goal = current.goal, paused = paused)
 
@@ -114,6 +119,7 @@ fun TodayScreen(
                 text = "No steps yet. Put the phone in your pocket and walk.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
                 modifier = Modifier.semantics {
                     liveRegion = LiveRegionMode.Polite
                 },
@@ -124,10 +130,14 @@ fun TodayScreen(
                 text = "Goal met. That's the true count — nicely walked.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
         }
         if (paused) {
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
+            ) {
                 Text(
                     text = "Counting paused. Your true count is held.",
                     style = MaterialTheme.typography.bodyMedium,
@@ -136,7 +146,10 @@ fun TodayScreen(
             }
         }
         if (sensorMissing) {
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
+            ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         text = "No step sensor found",
@@ -207,35 +220,43 @@ private fun ManualEditRow(
     onClear: () -> Unit,
 ) {
     val fmt = NumberFormat.getIntegerInstance()
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.semantics(mergeDescendants = true) {
-            contentDescription = "Manual step fix, currently $manualDelta"
-        },
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
     ) {
-        OutlinedButton(
-            onClick = onMinus,
-            modifier = Modifier.heightIn(min = 48.dp),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp)
+                .semantics(mergeDescendants = true) {
+                    contentDescription = "Manual step fix, currently $manualDelta"
+                },
         ) {
-            Icon(Icons.Filled.Remove, contentDescription = "Remove 100 manual steps")
-        }
-        Text(
-            text = fmt.format(manualDelta),
-            style = MaterialTheme.typography.titleMedium,
-        )
-        OutlinedButton(
-            onClick = onPlus,
-            modifier = Modifier.heightIn(min = 48.dp),
-        ) {
-            Icon(Icons.Filled.Add, contentDescription = "Add 100 manual steps")
-        }
-        if (manualDelta != 0) {
-            TextButton(
-                onClick = onClear,
+            OutlinedButton(
+                onClick = onMinus,
                 modifier = Modifier.heightIn(min = 48.dp),
             ) {
-                Text("Clear")
+                Icon(Icons.Filled.Remove, contentDescription = "Remove 100 manual steps")
+            }
+            Text(
+                text = fmt.format(manualDelta),
+                style = MaterialTheme.typography.titleMedium.tabulated(),
+            )
+            OutlinedButton(
+                onClick = onPlus,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = "Add 100 manual steps")
+            }
+            if (manualDelta != 0) {
+                TextButton(
+                    onClick = onClear,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
+                    Text("Clear")
+                }
             }
         }
     }
@@ -290,7 +311,7 @@ private fun TargetPicker(
                     }
                     Text(
                         text = fmt.format(value),
-                        style = MaterialTheme.typography.headlineSmall,
+                        style = MaterialTheme.typography.headlineSmall.tabulated(),
                     )
                     OutlinedButton(
                         onClick = { value = (value + 500).coerceAtMost(50_000) },
@@ -359,7 +380,10 @@ private fun GoalNudgeCard(onApplyGoal: (Int) -> Unit) {
     if (nudge == null || lastNudge == today.toString()) return
     val fmt = NumberFormat.getIntegerInstance()
     val todayStr = today.toString()
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
+    ) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -367,7 +391,7 @@ private fun GoalNudgeCard(onApplyGoal: (Int) -> Unit) {
             Text(
                 text = "Walking ~${fmt.format(nudge.dailyAverage)} a day lately. " +
                     "Raise goal to ${fmt.format(nudge.suggestedGoal)}?",
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyLarge.tabulated(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
@@ -422,6 +446,7 @@ private fun CelebrationSheetContent(
                 Icons.Filled.CheckCircle,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(40.dp),
             )
             Text(text = "Goal met", style = MaterialTheme.typography.headlineSmall)
             Text(

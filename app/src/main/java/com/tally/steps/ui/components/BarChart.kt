@@ -16,10 +16,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.tally.steps.data.Day
+import com.tally.steps.ui.theme.tabulated
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -57,7 +60,8 @@ fun RangeSwitch(
 
 /**
  * Static Canvas bars — no grow animation, so reduce-motion is
- * satisfied by construction. Today renders in accent. A text
+ * satisfied by construction. Today renders in accent over a soft
+ * highlight column; a dashed goal line marks the target. A text
  * fallback list below carries the same data with table semantics
  * for screen readers.
  */
@@ -68,8 +72,12 @@ fun BarChart(
 ) {
     val fmt = NumberFormat.getIntegerInstance()
     val maxSteps = (days.maxOfOrNull { it.steps } ?: 0).coerceAtLeast(1)
+    val goalRef = days.lastOrNull()?.goal ?: 0
+    // Headroom so the goal line never clips when the goal tops every bar.
+    val scale = maxOf(maxSteps, goalRef).coerceAtLeast(1)
     val accent = MaterialTheme.colorScheme.primary
     val muted = MaterialTheme.colorScheme.surfaceVariant
+    val highlight = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
     val today = java.time.LocalDate.now().toEpochDay()
 
     val summary = if (days.isEmpty()) "No step data"
@@ -85,7 +93,21 @@ fun BarChart(
             if (days.isEmpty()) return@Canvas
             val gap = 8.dp.toPx()
             val barW = ((size.width - gap * (days.size + 1)) / days.size).coerceAtLeast(4.dp.toPx())
-            val barH = { steps: Int -> (size.height - 8.dp.toPx()) * (steps.toFloat() / maxSteps) }
+            val plotH = size.height - 8.dp.toPx()
+            val barH = { steps: Int -> plotH * (steps.toFloat() / scale) }
+            // Selected-today emphasis: a soft full-height column behind
+            // today's bar, drawn first so bars sit on top of it.
+            days.forEachIndexed { i, day ->
+                if (day.epochDay == today) {
+                    val left = gap + i * (barW + gap)
+                    drawRoundRect(
+                        color = highlight,
+                        topLeft = Offset(left - gap / 2, 0f),
+                        size = Size(barW + gap, size.height),
+                        cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx()),
+                    )
+                }
+            }
             days.forEachIndexed { i, day ->
                 val h = barH(day.steps)
                 val left = gap + i * (barW + gap)
@@ -95,6 +117,18 @@ fun BarChart(
                     topLeft = Offset(left, top),
                     size = Size(barW, h),
                     cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx()),
+                )
+            }
+            // Goal line: dashed accent across the full width.
+            if (goalRef > 0) {
+                val y = size.height - plotH * (goalRef.toFloat() / scale)
+                drawLine(
+                    color = accent,
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 2.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f),
                 )
             }
         }
@@ -119,7 +153,7 @@ fun BarChartFallbackList(
             Text(
                 text = "$date: ${fmt.format(day.steps)} steps of ${fmt.format(day.goal)} goal" +
                     if (day.epochDay == today) " · today" else "",
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodySmall.tabulated(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

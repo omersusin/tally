@@ -11,6 +11,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Route
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -20,10 +22,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.tally.steps.ui.theme.TallyElevation
+import com.tally.steps.ui.theme.tabulated
 import java.util.Locale
 
 /**
- * 3-up stats: distance / calories / active minutes.
+ * 3-up stats: distance / calories / active minutes, seated on one
+ * elevated 16dp card. Values are semibold with tabular figures;
+ * icons stay quiet so the numbers lead.
  * One grouped a11y label, 48dp minimum row height.
  */
 @Composable
@@ -41,28 +47,63 @@ fun StatRow(
     val kcalText = "${kcal.toInt()} kcal"
     val minText = "$activeMin min"
 
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
+    ) {
+        StatCells(distanceText = distanceText, kcalText = kcalText, minText = minText)
+    }
+}
+
+@Composable
+private fun StatCells(
+    distanceText: String,
+    kcalText: String,
+    minText: String,
+) {
     Row(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = "Distance $distanceText, energy $kcalText, active time $minText"
             }
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
         StatCell(
-            icon = { Icon(Icons.Filled.Route, contentDescription = null, modifier = Modifier.size(20.dp)) },
+            icon = {
+                Icon(
+                    Icons.Filled.Route,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
             value = distanceText,
             label = "Distance",
         )
         StatCell(
-            icon = { Icon(Icons.Filled.LocalFireDepartment, contentDescription = null, modifier = Modifier.size(20.dp)) },
+            icon = {
+                Icon(
+                    Icons.Filled.LocalFireDepartment,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
             value = kcalText,
             label = "Energy",
         )
         StatCell(
-            icon = { Icon(Icons.Filled.DirectionsWalk, contentDescription = null, modifier = Modifier.size(20.dp)) },
+            icon = {
+                Icon(
+                    Icons.Filled.DirectionsWalk,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
             value = minText,
             label = "Active",
         )
@@ -77,7 +118,10 @@ private fun StatCell(
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         icon()
-        Text(text = value, style = MaterialTheme.typography.titleMedium)
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleMedium.tabulated(),
+        )
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,

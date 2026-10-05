@@ -2,8 +2,11 @@ package com.tally.steps.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -17,14 +20,18 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.tally.steps.ui.theme.tabulated
 import java.text.NumberFormat
 
 /**
  * Goal ring, 184dp home size. Static draw — no animation, so
  * reduce-motion needs nothing to disable. Plain and steady.
  *
- * Overflow (steps > goal) renders a full ring plus "+X over" — the
- * true count, never clamped in text.
+ * A 20dp track with rounded caps gives it real presence; the paused
+ * state keeps its dashed outline treatment.
+ *
+ * Overflow (steps > goal) renders a full ring plus a warm "+X over"
+ * pill — the true count, never clamped in text, clearly celebrated.
  */
 @Composable
 fun GoalRing(
@@ -56,7 +63,7 @@ fun GoalRing(
                     progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
                 },
         ) {
-            val stroke = 16.dp.toPx()
+            val stroke = 20.dp.toPx()
             val inset = stroke / 2 + 4.dp.toPx()
             val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
             drawArc(
@@ -83,11 +90,18 @@ fun GoalRing(
             )
         }
         if (overflow > 0) {
-            Text(
-                text = "+${fmt.format(overflow)} over",
-                style = MaterialTheme.typography.titleMedium,
+            Surface(
                 color = MaterialTheme.colorScheme.primary,
-            )
+                shape = RoundedCornerShape(999.dp),
+                modifier = Modifier.padding(top = 12.dp),
+            ) {
+                Text(
+                    text = "+${fmt.format(overflow)} over",
+                    style = MaterialTheme.typography.titleMedium.tabulated(),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
         }
     }
 }
