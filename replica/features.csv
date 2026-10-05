@@ -18,3 +18,8 @@ Health Connect sync,ecosystem,should,yes,no,read+write without double-count
 units + theme + AMOLED,settings,should,yes,no,
 goal adaptive suggestions,engage,could,no,yes,median-of-7 nudge card, quiet, local only
 challenges/streak repair,engage,could,partial,yes,rest-day repair 1 per week, local only
+drive/cycle false-positive veto,accuracy,must,no,yes,hold baseline in vehicle, honest note
+barometer floors,engage,should,no,yes,stair climbs only, sensor-gated
+pace projection,today,should,no,yes,on-pace-for-midnight + goal ETA, quiet
+OEM survival guides,engine,must,partial,yes,dontkillmyapp exact paths per brand
+Health Connect hardening,ecosystem,should,partial,yes,aggregate-only, dual origin, bg-perm gate

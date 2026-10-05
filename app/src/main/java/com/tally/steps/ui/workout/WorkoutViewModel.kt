@@ -166,7 +166,11 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
         val s = _ui.value
         if (s.phase != WorkoutUiState.Phase.ACTIVE) return
         if (!s.config.gpsAvailable || !s.config.type.usesGps) return
-        tracker.onLocation(lat, lon, System.currentTimeMillis(), accuracyM)
+        if (tracker.onLocation(lat, lon, System.currentTimeMillis(), accuracyM)) {
+            // Feed the engine veto: sustained drive-speeds hold the step baseline.
+            val speed = tracker.lastSpeedMs
+            viewModelScope.launch { runCatching { repo.reportSpeed(speed) } }
+        }
     }
 
     fun quickStart(type: WorkoutType) {

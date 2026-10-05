@@ -6,7 +6,9 @@ import com.tally.steps.data.Day
 import com.tally.steps.data.PrefsStore
 import com.tally.steps.data.TallyDatabase
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
@@ -35,6 +37,16 @@ class StepRepository private constructor(
     private val minuteSteps = mutableMapOf<Long, Long>()
     private val countedMinutes = mutableSetOf<Long>()
     private var activeDayEpoch: Long = -1L
+
+    // ---- Vehicle/cycle veto state (in-memory; survives no reboot, honest) ----
+    // AR-transition veto (service feeds via setArVeto) OR GPS-speed veto
+    // (whoever holds location feeds via reportSpeed). Either one holds the
+    // baseline: sensor deltas advance the baseline silently and are tallied
+    // into vetoIgnoredToday instead of steps. Reboot clears both flags, and a
+    // reboot already rebaselines, so the veto can only ever under-count.
+    private val arVeto = MutableStateFlow(false)
+    private val gpsVeto = MutableStateFlow(false)
+    private var fastStreak = 0
 
     // ---- Public API (keep signatures stable) ----
 
@@ -174,6 +186,65 @@ class StepRepository private constructor(
     }
 
     /**
+     * Vehicle/cycle veto, additive. True while IN_VEHICLE/ON_BICYCLE (Activity
+     * Recognition transitions, service-owned) or while GPS reports
+     * walk-impossible speed (workout-track owner feeds [reportSpeed]).
+     * UI: show a quiet "not counting — driving/cycling" note, never a number
+     * correction control; the ignored steps are gone by design.
+     */
+    fun vetoActive(): Flow<Boolean> =
+        combine(arVeto, gpsVeto) { a, g -> a || g }.distinctUntilChanged()
+
+    /**
+     * Steps swallowed by the veto today, for the honest UI note
+     * ("N steps ignored while driving/cycling"). Persisted in PrefsStore,
+     * reset on day rollover. Never added back to any total.
+     */
+    fun vetoIgnoredToday(): Flow<Int> = prefs.vetoIgnoredToday.distinctUntilChanged()
+
+    /** Floors climbed today, from [BaroFloors]; 0 also means "no barometer". */
+    fun floorsToday(): Flow<Int> = today().map { it.floors }.distinctUntilChanged()
+
+    /** Service-only: Activity Recognition transition state. Mutex-guarded. */
+    suspend fun setArVeto(active: Boolean) = mutex.withLock { arVeto.value = active }
+
+    /**
+     * Location-owner-only: one GPS speed sample in m/s per accepted fix.
+     * Sustained [VETO_SPEED_MPS]+ over [VETO_STREAK] consecutive fixes latches
+     * the GPS veto (walk-impossible: faster than any run); a slow fix below
+     * [VETO_CLEAR_MPS] releases it. Single noisy fixes never latch — hence
+     * the streak, hence the low release bar. Call only while a workout track
+     * is actively receiving fixes; never call with synthetic speeds.
+     */
+    suspend fun reportSpeed(speedMps: Float) = mutex.withLock {
+        if (!speedMps.isFinite()) return@withLock
+        if (speedMps > VETO_SPEED_MPS) {
+            if (++fastStreak >= VETO_STREAK) gpsVeto.value = true
+        } else {
+            fastStreak = 0
+            if (speedMps < VETO_CLEAR_MPS) gpsVeto.value = false
+        }
+    }
+
+    /**
+     * Barometer-service-only: credit completed floors to today. Additive;
+     * never touches steps/distance/kcal. Day rollover between events credits
+     * to whichever day is current at call time (under-count direction kept:
+     * each floor counted at most once, never duplicated across days).
+     */
+    suspend fun addFloors(n: Int) = mutex.withLock {
+        if (n <= 0) return@withLock
+        val t = todayEpoch()
+        val cur = dao.getDay(t) ?: blank(t)
+        dao.upsert(
+            cur.copy(
+                floors = (cur.floors + n).coerceIn(0, MAX_FLOORS),
+                updatedAt = now(),
+            ),
+        )
+    }
+
+    /**
      * Restore path: upsert backup rows with ranges clamped and estimates
      * recomputed, atomically. The user's current goal pref is NEVER overwritten
      * from backup — rows keep their own stored goal column, and today() always
@@ -191,6 +262,7 @@ class StepRepository private constructor(
                         // adjustManual's total>=0 guarantee); absurd values rejected at parse.
                         manualDelta = d.manualDelta.coerceIn(-steps, MANUAL_DELTA_ABS_MAX),
                         goal = d.goal.coerceIn(0, 200_000),
+                        floors = d.floors.coerceIn(0, MAX_FLOORS),
                         updatedAt = if (d.updatedAt > 0) d.updatedAt else now(),
                     ),
                 ).copy(goal = d.goal.coerceIn(0, 200_000))
@@ -222,6 +294,15 @@ class StepRepository private constructor(
         val delta = counter - baseline
         prefs.setBaselineAndSensorAt(counter, nowMs)
         if (prefs.paused.first() || delta <= 0) {
+            ensureToday(t)
+            return@withLock
+        }
+        // Vehicle/cycle veto: baseline already advanced above, so this delta
+        // can never be credited later — it is silently dropped and tallied
+        // into vetoIgnoredToday for the honest UI note. Same philosophy as
+        // the crash path: under-count, never phantom.
+        if (arVeto.value || gpsVeto.value) {
+            prefs.addVetoIgnored(delta.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
             ensureToday(t)
             return@withLock
         }
@@ -275,8 +356,8 @@ class StepRepository private constructor(
             val today = LocalDate.now()
             val cur = dao.getDay(t) ?: blank(t)
             if (now() - prefs.lastSensorAtMs.first() > GAP_MS) {
-                val external = hc.readDayExclOurs(app, today).coerceAtMost(MAX_STEPS.toLong())
-                if (external > cur.steps) {
+                val external = hc.readDayForWorker(app, today)?.coerceAtMost(MAX_STEPS.toLong())
+                if (external != null && external > cur.steps) {
                     dao.upsert(estimates(cur.copy(steps = external.toInt(), source = "hc")))
                 }
             }
@@ -333,6 +414,13 @@ class StepRepository private constructor(
 
     private suspend fun ensureToday(t: Long) {
         if (dao.getDay(t) == null) dao.upsert(blank(t))
+        // Veto-counter rollover: same hook, same mutex. First event of a new
+        // day resets the honest-note counter; stale vetoDay (-1 included)
+        // always mismatches, so a fresh install resets harmlessly to 0.
+        if (prefs.vetoDay.first() != t) {
+            prefs.setVetoIgnoredToday(0)
+            prefs.setVetoDay(t)
+        }
     }
 
     private suspend fun blank(t: Long): Day =
@@ -360,6 +448,17 @@ class StepRepository private constructor(
         private const val GAP_MS = 30 * 60 * 1000L
         /** Absurd manual corrections are rejected at CSV parse; this is the last-resort clamp. */
         private const val MANUAL_DELTA_ABS_MAX = 100_000
+        /** Absurd floor counts are rejected; nobody climbs 10k floors in a day. */
+        private const val MAX_FLOORS = 10_000
+        /**
+         * GPS veto: sustained speed above this latches (walk-impossible —
+         * above WorkoutTracker.MAX_WALK_SPEED_MS with margin, so a sprint
+         * never trips it); below [VETO_CLEAR_MPS] releases. Streak required
+         * so one noisy fix can't veto real steps.
+         */
+        private const val VETO_SPEED_MPS = 4f
+        private const val VETO_CLEAR_MPS = 2f
+        private const val VETO_STREAK = 3
         /** Active-minute step thresholds per sensitivity (see sensitivityThreshold). */
         private const val ACTIVE_THRESHOLD_L = 100
         private const val ACTIVE_THRESHOLD_M = 60

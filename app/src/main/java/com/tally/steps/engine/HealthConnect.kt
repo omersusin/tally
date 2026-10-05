@@ -1,25 +1,32 @@
 package com.tally.steps.engine
 
 import android.content.Context
+import android.content.pm.PackageManager
+import android.health.connect.HealthConnectManager
 import android.os.Build
+import android.os.ext.SdkExtensions
+import androidx.core.content.ContextCompat
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.metadata.DataOrigin
 import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
-import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
+import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
-import java.time.Period
 import java.time.ZoneId
 
 /**
  * Thin Health Connect wrapper (connect-client 1.1.0): aggregate reads with
  * own-write echo subtraction, replace-own write-back. Gating on hcMode and
  * gap logic live in [StepRepository]; this class never decides, only IO.
+ *
+ * Docs (developer.android.com/health-and-fitness): cumulative types such as
+ * StepsRecord MUST be read with aggregate(), never readRecords(), to avoid
+ * double counting across sources. This file uses only aggregate().
  */
 class HealthConnect {
 
@@ -51,7 +58,43 @@ class HealthConnect {
         }.getOrDefault(false)
     }
 
-    /** Today's steps from everyone except us (echo subtraction via double aggregate). */
+    /** Background-read permission, declared plainly in the manifest (no maxSdkVersion).
+     * Without this grant, background reads return only our own records, so the
+     * caller must skip honestly and keep the local sensor count. */
+    companion object {
+        const val BACKGROUND_PERMISSION =
+            "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
+    }
+
+    /** True when background reads are allowed to see other apps' data. Never throws. */
+    fun hasBackgroundPermission(context: Context): Boolean = runCatching {
+        ContextCompat.checkSelfPermission(context, BACKGROUND_PERMISSION) ==
+            PackageManager.PERMISSION_GRANTED
+    }.getOrDefault(false)
+
+    /**
+     * Worker entry: on API 36+ background reads need the background grant,
+     * so a missing grant honestly skips (null) instead of merging a self-only
+     * read. Below 36 the platform has no such gate — read directly.
+     */
+    suspend fun readDayForWorker(context: Context, date: LocalDate): Long? {
+        if (android.os.Build.VERSION.SDK_INT >= 36) return readDayInBackground(context, date)
+        return readDayExclOurs(context, date)
+    }
+
+    /**
+     * Today's steps from everyone except us (echo subtraction via double aggregate).
+     *
+     * Note for the UI: Health Connect syncs with roughly a 15-minute delay, so
+     * merged counts shown on screen can lag the live sensor by that much. This
+     * is a Health Connect sync delay, not missing steps.
+     *
+     * The unfiltered "all" aggregate already includes on-device phone steps
+     * automatically (no DataOrigin filter = no June-2026 SPN migration work
+     * needed for the total). Our own write-back is attributed to our own
+     * package name, so subtracting DataOrigin(packageName) removes exactly the
+     * echo and nothing else.
+     */
     suspend fun readDayExclOurs(context: Context, date: LocalDate): Long {
         if (!isAvailable(context)) return 0
         return runCatching {
@@ -62,23 +105,63 @@ class HealthConnect {
         }.getOrDefault(0)
     }
 
+    /**
+     * Background-safe variant: returns null when [BACKGROUND_PERMISSION] is not
+     * granted, so the caller honestly skips and keeps the sensor value instead
+     * of merging a self-only (echo-only) background read. Foreground code must
+     * keep calling [readDayExclOurs] directly; this gate is background-only.
+     */
+    suspend fun readDayInBackground(context: Context, date: LocalDate): Long? {
+        if (!hasBackgroundPermission(context)) return null
+        return readDayExclOurs(context, date)
+    }
+
+    /**
+     * On-device phone-step origins: DataOrigin("android") for history recorded
+     * before June 2026, plus the device SPN (e.g. com.android.healthconnect
+     * .phone.<id>, app-scoped and device-specific, never hardcode it) via
+     * HealthConnectManager.getCurrentDeviceDataSource() afterwards. Used only
+     * for explicit on-device breakdowns such as [readDeviceSteps]; the merged
+     * total intentionally uses NO filter so platform steps stay included.
+     */
+    fun platformOrigins(context: Context): Set<DataOrigin> {
+        val origins = mutableSetOf(DataOrigin("android"))
+        runCatching {
+            val extReady = Build.VERSION.SDK_INT >= Build.VERSION_CODES.U &&
+                SdkExtensions.getExtensionVersion(Build.VERSION_CODES.U) >= 11
+            if (extReady) {
+                val manager = context.getSystemService(HealthConnectManager::class.java)
+                val spn = manager?.getCurrentDeviceDataSource()?.deviceDataOrigin?.packageName
+                if (!spn.isNullOrEmpty()) origins.add(DataOrigin(spn))
+            }
+        }
+        return origins
+    }
+
+    /** On-device phone steps only (android + current SPN), for attribution UI. */
+    suspend fun readDeviceSteps(context: Context, date: LocalDate): Long {
+        if (!isAvailable(context)) return 0
+        return runCatching {
+            dayTotal(HealthConnectClient.getOrCreate(context), date, platformOrigins(context))
+        }.getOrDefault(0)
+    }
+
     private suspend fun dayTotal(
         client: HealthConnectClient,
         date: LocalDate,
         origins: Set<DataOrigin>,
     ): Long {
-        val groups = client.aggregateGroupByPeriod(
-            AggregateGroupByPeriodRequest(
+        val response = client.aggregate(
+            AggregateRequest(
                 metrics = setOf(StepsRecord.COUNT_TOTAL),
                 timeRangeFilter = TimeRangeFilter.between(
                     date.atStartOfDay(),
                     date.atTime(LocalTime.MAX),
                 ),
-                timeRangeSlicer = Period.ofDays(1),
                 dataOriginFilter = origins,
             ),
         )
-        return groups.sumOf { it.result[StepsRecord.COUNT_TOTAL] ?: 0L }
+        return response[StepsRecord.COUNT_TOTAL] ?: 0L
     }
 
     /**

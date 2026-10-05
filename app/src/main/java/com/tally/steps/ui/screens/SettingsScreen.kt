@@ -9,6 +9,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -494,28 +495,100 @@ private fun BatteryCard(context: Context, batteryAsked: Boolean, onAsked: () -> 
         )
         OemCard(
             brand = "Xiaomi / Redmi / POCO",
-            steps = "Settings → Apps → Tally → Autostart ON; " +
-                "Battery saver → No restrictions; " +
-                "lock Tally in the Recents screen.",
+            steps = OemXiaomiSteps,
+            note = OemXiaomiNote,
+        )
+        OemCard(
+            brand = "Huawei / Honor",
+            steps = OemHuaweiSteps,
+            note = OemHuaweiNote,
+        )
+        OemCard(
+            brand = "Samsung",
+            steps = OemSamsungSteps,
+            note = OemSamsungNote,
         )
         OemCard(
             brand = "Oppo / Vivo / Realme",
-            steps = "Settings → Battery → Tally → Allow background activity; " +
-                "enable Tally in Startup manager / Autostart.",
+            steps = OemOppoSteps,
+            note = null,
         )
     }
 }
 
+// OEM steps duplicated in SettingsScreen.kt and OnboardingScreen.kt — keep in sync.
+private val OemXiaomiSteps = listOf(
+    "Open Recents, find Tally, then lock it: tap the padlock icon (or swipe down on the card).",
+    "Settings → Apps → Tally → Autostart: turn ON.",
+    "Settings → Battery → Tally: set to No restrictions.",
+    "MIUI 14: also allow Background autostart for Tally.",
+)
+private const val OemXiaomiNote =
+    "Some MIUI versions offer “Turn off MIUI optimization” under Developer options. " +
+        "It can help, but it resets some system settings — only try it if counting still stops."
+private val OemHuaweiSteps = listOf(
+    "Settings → Battery → App launch → Tally: turn OFF auto, choose Manage manually, turn all switches ON.",
+    "Battery optimization → Tally: set to Allow (ignore battery optimization).",
+    "Older EMUI: Settings → Protected apps: turn ON for Tally.",
+)
+private const val OemHuaweiNote =
+    "EMUI 9+ advanced only: PowerGenie can still stop apps. " +
+        "If you know what adb is: adb shell pm uninstall --user 0 com.huawei.powergenie"
+private val OemSamsungSteps = listOf(
+    "Settings → Battery: turn Adaptive battery OFF (or exempt Tally).",
+    "Settings → Battery → Background usage limits → Never sleeping apps: add Tally.",
+    "Settings → Apps → Tally → Battery: set to Unrestricted.",
+    "Settings → Apps → Tally → Alarms & reminders: Allow, so the counter can restart on time.",
+)
+private const val OemSamsungNote =
+    "Warning: Samsung sometimes puts apps back to sleep after a system update " +
+        "or about 3 days idle. If counting stops, check this list again."
+private val OemOppoSteps = listOf(
+    "Settings → Startup manager (or Autostart): allow Tally to start automatically.",
+    "Settings → Battery → Tally: allow background activity.",
+    "Battery optimization → Tally: set to Not optimized.",
+    "Open Recents and lock Tally (padlock) so it is not swiped away.",
+)
+private const val OemTestLine =
+    "Test it: lock your phone for 10 minutes, walk a little, then check the count."
+
 @Composable
-private fun OemCard(brand: String, steps: String) {
+private fun OemCard(brand: String, steps: List<String>, note: String?) {
+    var expanded by remember { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(12.dp),
+        ) {
             Text(brand, style = MaterialTheme.typography.titleSmall)
             Text(
-                steps,
+                if (expanded) "Tap to hide" else "Tap for steps",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (expanded) {
+                steps.forEachIndexed { i, step ->
+                    Text(
+                        "${i + 1}. $step",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                note?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    OemTestLine,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

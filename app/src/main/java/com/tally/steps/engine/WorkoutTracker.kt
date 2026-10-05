@@ -60,6 +60,10 @@ class WorkoutTracker {
      * Returns true when the fix was accepted. Dropped when paused, when
      * accuracy > 20m, or when speed vs the last accepted fix exceeds 3.5 m/s.
      */
+    /** Speed of the last judged window in m/s; 0 when no window was judged yet. */
+    var lastSpeedMs: Float = 0f
+        private set
+
     fun onLocation(lat: Double, lon: Double, timeMs: Long, accuracyM: Float): Boolean {
         if (!started || paused) return false
         if (accuracyM > MAX_ACCURACY_M) return false
@@ -71,6 +75,7 @@ class WorkoutTracker {
             // otherwise sub-second jitter would false-trigger on noise.
             if (dtS >= WINDOW_S) {
                 val speed = haversineM(last.lat, last.lon, lat, lon) / dtS
+                lastSpeedMs = speed.toFloat()
                 if (speed > MAX_WALK_SPEED_MS) return false
             }
         }

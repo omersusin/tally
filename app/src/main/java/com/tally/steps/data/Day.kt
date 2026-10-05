@@ -23,4 +23,12 @@ data class Day(
      * every pre-v3 row reads as "not rest" until Migration(2, 3) backfills 0.
      */
     val restDay: Boolean = false,
+    /**
+     * Floors climbed today, from the barometer ([BaroFloors]). Barometer-less
+     * devices never write here — 0 both means "none climbed" and "no sensor",
+     * so the UI must check BaroFloors.hasBarometer() before showing the row.
+     * Appended last so every existing positional constructor call (blank())
+     * keeps compiling; pre-v4 rows backfill 0 via Migration(3, 4).
+     */
+    val floors: Int = 0,
 )

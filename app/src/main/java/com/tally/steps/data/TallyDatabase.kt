@@ -6,7 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 
-@Database(entities = [Day::class, Workout::class], version = 3, exportSchema = false)
+@Database(entities = [Day::class, Workout::class], version = 4, exportSchema = false)
 abstract class TallyDatabase : RoomDatabase() {
     abstract fun dayDao(): DayDao
     abstract fun workoutDao(): WorkoutDao
@@ -42,6 +42,16 @@ abstract class TallyDatabase : RoomDatabase() {
                     db.execSQL(
                         "ALTER TABLE `days` " +
                             "ADD COLUMN `restDay` INTEGER NOT NULL DEFAULT 0",
+                    )
+                }
+            },
+            object : Migration(3, 4) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    // Barometer floors: new non-null column, old rows read as 0.
+                    // No row is touched, no data lost.
+                    db.execSQL(
+                        "ALTER TABLE `days` " +
+                            "ADD COLUMN `floors` INTEGER NOT NULL DEFAULT 0",
                     )
                 }
             },

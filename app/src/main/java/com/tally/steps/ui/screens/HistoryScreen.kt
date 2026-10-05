@@ -177,8 +177,9 @@ private fun DayDetail(day: Day) {
             )
             Text(
                 text = "${"%.1f".format(day.distanceM / 1000f)} km · " +
-                    "${day.kcal.toInt()} kcal · ${day.activeMin} min active",
-                style = MaterialTheme.typography.bodyMedium.tabulated(),
+                    "${day.kcal.toInt()} kcal · ${day.activeMin} min active" +
+                    if (day.floors > 0) " · ${day.floors} floors" else "",
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (day.manualDelta != 0) {

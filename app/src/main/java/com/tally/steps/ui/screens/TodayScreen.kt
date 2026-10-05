@@ -62,6 +62,7 @@ import com.tally.steps.ui.workout.EngineBridge
 import com.tally.steps.engine.GoalCoach
 import java.text.NumberFormat
 import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.launch
 
 @Composable
@@ -101,6 +102,8 @@ fun TodayScreen(
     }
 
     val goalReached = current.goal > 0 && current.steps >= current.goal
+    val floors by vm.floors.collectAsStateWithLifecycle()
+    val vetoNote by vm.vetoNote.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -178,6 +181,32 @@ fun TodayScreen(
             )
         }
 
+        val paceText = rememberPaceText(steps = current.steps, goal = current.goal)
+        if (paceText != null) {
+            Text(
+                text = paceText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
+
+        if (vm.hasBarometer && floors > 0) {
+            Text(
+                text = "$floors floor${if (floors == 1) "" else "s"} climbed today.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        if (vetoNote != null) {
+            Text(
+                text = vetoNote!!,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         ManualEditRow(
             manualDelta = current.manualDelta,
             onPlus = { vm.nudgeManual(100) },
@@ -210,6 +239,31 @@ fun TodayScreen(
     if (goalReached) {
         CelebrationSheet(dayKey = current.epochDay, steps = current.steps)
     }
+}
+
+@Composable
+private fun rememberPaceText(steps: Int, goal: Int): String? {
+    if (steps <= 0 || goalReached(steps, goal)) return null
+    val zone = ZoneId.systemDefault()
+    val dayStartMs = LocalDate.now().atStartOfDay(zone).toInstant().toEpochMilli()
+    val (projected, etaMin) = GoalCoach.projectDay(
+        stepsNow = steps,
+        goal = goal,
+        dayStartMs = dayStartMs,
+        nowMs = System.currentTimeMillis(),
+    )
+    val fmt = NumberFormat.getIntegerInstance()
+    val eta = etaMin?.let { " Goal in about ${formatEta(it)} at this pace." } ?: ""
+    return "On pace for ~${fmt.format(projected)} by midnight.$eta"
+}
+
+private fun goalReached(steps: Int, goal: Int): Boolean = goal > 0 && steps >= goal
+
+private fun formatEta(mins: Int): String {
+    if (mins < 60) return "$mins min"
+    val h = mins / 60
+    val m = mins % 60
+    return if (m == 0) "$h h" else "$h h $m min"
 }
 
 @Composable

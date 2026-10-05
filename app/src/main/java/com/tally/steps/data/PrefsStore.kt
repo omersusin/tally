@@ -33,6 +33,8 @@ class PrefsStore(private val context: Context) {
         val paused = booleanPreferencesKey("paused")
         val lastSensorAtMs = longPreferencesKey("last_sensor_at_ms")
         val lastNudgeDay = stringPreferencesKey("last_nudge_day")
+        val vetoIgnoredToday = intPreferencesKey("veto_ignored_today")
+        val vetoDay = longPreferencesKey("veto_day")
     }
 
     val goal: Flow<Int> = context.tallyPrefs.data.map { it[K.goal] ?: 8000 }
@@ -56,6 +58,15 @@ class PrefsStore(private val context: Context) {
     val lastSensorAtMs: Flow<Long> = context.tallyPrefs.data.map { it[K.lastSensorAtMs] ?: 0L }
     /** "yyyy-MM-dd" of the last goal-nudge card shown; empty = never. Guards once-per-day. */
     val lastNudgeDay: Flow<String> = context.tallyPrefs.data.map { it[K.lastNudgeDay] ?: "" }
+    /**
+     * Steps swallowed by the vehicle/cycle veto today (honest UI note:
+     * "N steps ignored while driving/cycling"). Reset on day rollover by
+     * StepRepository.ensureToday via [vetoDay]. Step counts live in Room;
+     * this counter is a UI-facing note only, never added back to steps.
+     */
+    val vetoIgnoredToday: Flow<Int> = context.tallyPrefs.data.map { it[K.vetoIgnoredToday] ?: 0 }
+    /** Epoch day the veto counter belongs to; mismatch with today = stale, reset. */
+    val vetoDay: Flow<Long> = context.tallyPrefs.data.map { it[K.vetoDay] ?: -1L }
 
     suspend fun setGoal(v: Int) = context.tallyPrefs.edit { it[K.goal] = v.coerceIn(1_000, 100_000) }
     suspend fun setHeightCm(v: Int) = context.tallyPrefs.edit { it[K.heightCm] = v.coerceIn(100, 230) }
@@ -79,6 +90,12 @@ class PrefsStore(private val context: Context) {
     suspend fun setBootId(v: Long) = context.tallyPrefs.edit { it[K.bootId] = v }
     suspend fun setPaused(v: Boolean) = context.tallyPrefs.edit { it[K.paused] = v }
     suspend fun setLastNudgeDay(v: String) = context.tallyPrefs.edit { it[K.lastNudgeDay] = v }
+    /** Single-transaction increment: never loses a vetoed delta to a concurrent reset. */
+    suspend fun addVetoIgnored(delta: Int) = context.tallyPrefs.edit {
+        it[K.vetoIgnoredToday] = ((it[K.vetoIgnoredToday] ?: 0) + delta).coerceAtLeast(0)
+    }
+    suspend fun setVetoIgnoredToday(v: Int) = context.tallyPrefs.edit { it[K.vetoIgnoredToday] = v.coerceAtLeast(0) }
+    suspend fun setVetoDay(v: Long) = context.tallyPrefs.edit { it[K.vetoDay] = v }
 
     companion object {
         @Volatile

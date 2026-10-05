@@ -6,8 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.tally.steps.TallyApp
 import com.tally.steps.data.Day
 import com.tally.steps.engine.StepRepository
+import com.tally.steps.engine.BaroFloors
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -32,6 +34,24 @@ class TodayViewModel(application: Application) : AndroidViewModel(application) {
     val sensorMissing: StateFlow<Boolean> = repository.hasSensor()
         .map { !it }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** Floors climbed today; 0 also means "no barometer" — UI gates on hasBarometer. */
+    val floors: StateFlow<Int> = repository.floorsToday()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    val hasBarometer: Boolean = BaroFloors.hasBarometer(getApplication())
+
+    /** Quiet veto note, or null when there is nothing to say. */
+    val vetoNote: StateFlow<String?> = combine(
+        repository.vetoActive(),
+        repository.vetoIgnoredToday(),
+    ) { active, ignored ->
+        when {
+            active -> "Not counting right now — driving or cycling."
+            ignored > 0 -> "$ignored steps ignored while driving or cycling today."
+            else -> null
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun setGoal(steps: Int) {
         viewModelScope.launch { repository.setGoal(steps.coerceIn(1_000, 50_000)) }

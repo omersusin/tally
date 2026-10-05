@@ -85,6 +85,32 @@ object GoalCoach {
         return run to rest
     }
 
+    /**
+     * Pace projection for "at this pace" honesty: linear extrapolation of
+     * today's steps to midnight. Returns (projectedTotal, minutesToGoal?) —
+     * minutesToGoal is null when the pace never reaches [goal] or goal <= 0.
+     * Before 5 minutes of day have passed the pace is noise → returns today's
+     * steps with null ETA. Never throws.
+     */
+    fun projectDay(
+        stepsNow: Int,
+        goal: Int,
+        dayStartMs: Long,
+        nowMs: Long,
+    ): Pair<Int, Int?> {
+        val elapsedMin = ((nowMs - dayStartMs) / 60_000L).coerceAtLeast(0)
+        if (elapsedMin < 5) return stepsNow to null
+        val perMin = stepsNow.toDouble() / elapsedMin
+        val remainingMin = (1440 - elapsedMin).coerceAtLeast(0)
+        val projected = (stepsNow + perMin * remainingMin).toInt().coerceAtLeast(0)
+        val etaMin = if (goal > 0 && perMin > 0 && stepsNow < goal) {
+            ((goal - stepsNow) / perMin).toInt().coerceAtLeast(0)
+        } else {
+            null
+        }
+        return projected to etaMin
+    }
+
     private fun median(values: List<Int>): Int {
         val s = values.sorted()
         val m = s.size / 2

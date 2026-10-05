@@ -44,7 +44,13 @@ class StepCounterService : Service() {
     private var collectJob: Job? = null
     private lateinit var repo: StepRepository
     private var listener: SensorEventListener? = null
+    private var baroListener: SensorEventListener? = null
+    private val baroFloors = BaroFloors()
     private var dateRegistered = false
+    private var vetoRegistered = false
+    private var vetoPendingIntent: PendingIntent? = null
+    /** Activities currently ENTERed per AR transitions; non-empty = veto. Main-thread only. */
+    private val vetoActivities = mutableSetOf<Int>()
     /**
      * Ordered sensor pipeline: the listener only enqueues (never launches work),
      * ONE consumer below drains in arrival order under the repo mutex. UNLIMITED
@@ -57,6 +63,44 @@ class StepCounterService : Service() {
     private val dateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             scope.launch { runCatching { repo.onDateOrZoneChanged() } }
+        }
+    }
+
+    /**
+     * Activity Transition result sink. Parses ENTER/EXIT for IN_VEHICLE and
+     * ON_BICYCLE via the same reflected classes (absent = never called, veto
+     * stays off). Keeps the ENTERed set and pushes veto = set.isNotEmpty().
+     */
+    private val vetoReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val active = runCatching {
+                val resultClass =
+                    Class.forName("com.google.android.gms.location.ActivityTransitionResult")
+                val hasResult = resultClass.getMethod("hasResult", Intent::class.java)
+                if (!(hasResult.invoke(null, intent) as Boolean)) return@runCatching null
+                val result =
+                    resultClass.getMethod("extractResult", Intent::class.java).invoke(null, intent)
+                        ?: return@runCatching null
+                @Suppress("UNCHECKED_CAST")
+                val events =
+                    resultClass.getMethod("getTransitionEvents").invoke(result) as List<*>
+                val detectedClass =
+                    Class.forName("com.google.android.gms.location.DetectedActivity")
+                val inVehicle = detectedClass.getField("IN_VEHICLE").getInt(null)
+                val onBicycle = detectedClass.getField("ON_BICYCLE").getInt(null)
+                val transitionClass =
+                    Class.forName("com.google.android.gms.location.ActivityTransition")
+                val enter = transitionClass.getField("ACTIVITY_TRANSITION_ENTER").getInt(null)
+                for (e in events) {
+                    if (e == null) continue
+                    val type = e.javaClass.getMethod("getActivityType").invoke(e) as Int
+                    if (type != inVehicle && type != onBicycle) continue
+                    val trans = e.javaClass.getMethod("getTransitionType").invoke(e) as Int
+                    if (trans == enter) vetoActivities.add(type) else vetoActivities.remove(type)
+                }
+                vetoActivities.isNotEmpty()
+            }.getOrNull() ?: return
+            scope.launch { runCatching { repo.setArVeto(active) } }
         }
     }
 
@@ -90,6 +134,8 @@ class StepCounterService : Service() {
         }
         startForegroundTyped(buildSnapshot(0, 8000, false))
         registerSensor()
+        registerBarometer()
+        registerVehicleVeto()
         if (!dateRegistered) {
             dateRegistered = true
             ContextCompat.registerReceiver(
@@ -137,10 +183,27 @@ class StepCounterService : Service() {
 
     override fun onDestroy() {
         runCatching { unregisterReceiver(dateReceiver) }
-        listener?.let {
-            (getSystemService(SENSOR_SERVICE) as SensorManager).unregisterListener(it)
+        if (vetoRegistered) {
+            runCatching { unregisterReceiver(vetoReceiver) }
+            vetoRegistered = false
         }
+        // Best-effort: stop AR callbacks. Absent API = no-op; failure to
+        // remove only costs battery, never phantom steps (fresh process =
+        // veto off + rebaseline anyway).
+        runCatching {
+            val pi = vetoPendingIntent ?: return@runCatching
+            val arClass = Class.forName("com.google.android.gms.location.ActivityRecognition")
+            val client = arClass.getMethod("getClient", Context::class.java).invoke(null, this)
+                ?: return@runCatching
+            client.javaClass.getMethod("removeActivityTransitionUpdates", PendingIntent::class.java)
+                .invoke(client, pi)
+        }
+        vetoPendingIntent = null
+        val sm = getSystemService(SENSOR_SERVICE) as SensorManager
+        listener?.let { sm.unregisterListener(it) }
         listener = null
+        baroListener?.let { sm.unregisterListener(it) }
+        baroListener = null
         scope.cancel()
         super.onDestroy()
     }
@@ -175,6 +238,99 @@ class StepCounterService : Service() {
         // SENSOR_DELAY_UI: hardware batching does the work; faster rates only burn battery.
         sm.registerListener(l, sensor, SensorManager.SENSOR_DELAY_UI)
         listener = l
+    }
+
+    /**
+     * Barometer floors: registers TYPE_PRESSURE only when the hardware exists
+     * ([BaroFloors.hasBarometer] — whole feature hides otherwise, no permission
+     * needed). SENSOR_DELAY_NORMAL = low power; events are cheap EMA math and
+     * only a completed floor touches the DB (one upsert per floor, not per
+     * event). Feeds [BaroFloors.onPressure]; true = landing reached → credit.
+     */
+    private fun registerBarometer() {
+        if (baroListener != null || !BaroFloors.hasBarometer(this)) return
+        val sm = getSystemService(SENSOR_SERVICE) as SensorManager
+        val sensor = sm.getDefaultSensor(Sensor.TYPE_PRESSURE) ?: return
+        val l = object : SensorEventListener {
+            override fun onSensorChanged(e: SensorEvent) {
+                val done = baroFloors.onPressure(e.values[0], System.currentTimeMillis())
+                if (done) scope.launch { runCatching { repo.addFloors(1) } }
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+        sm.registerListener(l, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+        baroListener = l
+    }
+
+    /**
+     * Vehicle/cycle veto via the Activity Recognition Transition API
+     * (IN_VEHICLE + ON_BICYCLE, ENTER/EXIT).
+     *
+     * Reflection, deliberately: play-services-location is NOT a compile
+     * dependency, so on degoogled phones (or until the build owner adds
+     * `implementation("com.google.android.gms:play-services-location:21.x")`)
+     * Class.forName throws, runCatching swallows it, and the veto stays off.
+     * API absent → veto off, steps count exactly as before. The GPS-speed veto
+     * in [StepRepository.reportSpeed] is the zero-dependency backup and works
+     * regardless. Dynamic receiver is fine: this is a sticky foreground
+     * service, alive exactly while counting matters; process death clears the
+     * ENTER set AND rebaselines, so a stale veto can never stick.
+     */
+    private fun registerVehicleVeto() {
+        if (vetoRegistered) return
+        runCatching {
+            val arClass = Class.forName("com.google.android.gms.location.ActivityRecognition")
+            val client = arClass.getMethod("getClient", Context::class.java).invoke(null, this)
+                ?: return@runCatching
+            val transitionClass = Class.forName("com.google.android.gms.location.ActivityTransition")
+            val enter = transitionClass.getField("ACTIVITY_TRANSITION_ENTER").getInt(null)
+            val exit = transitionClass.getField("ACTIVITY_TRANSITION_EXIT").getInt(null)
+            val detectedClass = Class.forName("com.google.android.gms.location.DetectedActivity")
+            val inVehicle = detectedClass.getField("IN_VEHICLE").getInt(null)
+            val onBicycle = detectedClass.getField("ON_BICYCLE").getInt(null)
+            val builderClass =
+                Class.forName("com.google.android.gms.location.ActivityTransition\$Builder")
+            val newBuilder = builderClass.getDeclaredConstructor()
+            val setType =
+                builderClass.getMethod("setActivityType", Int::class.javaPrimitiveType)
+            val setTrans =
+                builderClass.getMethod("setActivityTransition", Int::class.javaPrimitiveType)
+            val build = builderClass.getMethod("build")
+            fun transition(activity: Int, type: Int): Any {
+                val b = newBuilder.newInstance()
+                setType.invoke(b, activity)
+                setTrans.invoke(b, type)
+                return build.invoke(b)
+            }
+            val requestClass =
+                Class.forName("com.google.android.gms.location.ActivityTransitionRequest")
+            val request = requestClass.getDeclaredConstructor(List::class.java).newInstance(
+                listOf(
+                    transition(inVehicle, enter),
+                    transition(inVehicle, exit),
+                    transition(onBicycle, enter),
+                    transition(onBicycle, exit),
+                ),
+            )
+            val pi = PendingIntent.getBroadcast(
+                this, VETO_PI_REQUEST, Intent(ACTION_VETO_TRANSITION),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            client.javaClass.getMethod(
+                "requestActivityTransitionUpdates",
+                requestClass,
+                PendingIntent::class.java,
+            ).invoke(client, request, pi)
+            vetoPendingIntent = pi
+            ContextCompat.registerReceiver(
+                this,
+                vetoReceiver,
+                IntentFilter(ACTION_VETO_TRANSITION),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            vetoRegistered = true
+        }
     }
 
     private fun hasActivityRecognition(): Boolean =
@@ -223,6 +379,8 @@ class StepCounterService : Service() {
     companion object {
         const val ACTION_PAUSE = "com.tally.steps.action.PAUSE"
         const val ACTION_RESUME = "com.tally.steps.action.RESUME"
+        private const val ACTION_VETO_TRANSITION = "com.tally.steps.action.VETO_TRANSITION"
+        private const val VETO_PI_REQUEST = 2001
         const val CHANNEL_ID = "tally_steps"
         private const val NOTIF_ID = 1001
 
