@@ -2,9 +2,6 @@ package com.tally.steps.engine
 
 import android.content.Context
 import android.content.pm.PackageManager
-import android.health.connect.HealthConnectManager
-import android.os.Build
-import android.os.ext.SdkExtensions
 import androidx.core.content.ContextCompat
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
@@ -126,14 +123,20 @@ class HealthConnect {
      */
     fun platformOrigins(context: Context): Set<DataOrigin> {
         val origins = mutableSetOf(DataOrigin("android"))
+        // Post-June-2026 on-device steps carry the device SPN, not "android".
+        // No stable SDK accessor exists in connect-client 1.1.0, so look it up
+        // reflectively; any failure keeps just "android" (merged total uses no
+        // filter anyway, so this only narrows the attribution breakdown).
         runCatching {
-            val extReady = Build.VERSION.SDK_INT >= Build.VERSION_CODES.U &&
-                SdkExtensions.getExtensionVersion(Build.VERSION_CODES.U) >= 11
-            if (extReady) {
-                val manager = context.getSystemService(HealthConnectManager::class.java)
-                val spn = manager?.getCurrentDeviceDataSource()?.deviceDataOrigin?.packageName
-                if (!spn.isNullOrEmpty()) origins.add(DataOrigin(spn))
-            }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return@runCatching
+            val mgrClass = Class.forName("android.health.connect.HealthConnectManager")
+            val manager = context.getSystemService(mgrClass) ?: return@runCatching
+            val source = mgrClass.getMethod("getCurrentDeviceDataSource").invoke(manager)
+                ?: return@runCatching
+            val origin = source.javaClass.getMethod("getDeviceDataOrigin").invoke(source)
+                ?: return@runCatching
+            val pkg = origin.javaClass.getMethod("getPackageName").invoke(origin) as? String
+            if (!pkg.isNullOrEmpty()) origins.add(DataOrigin(pkg))
         }
         return origins
     }
