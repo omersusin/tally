@@ -1,5 +1,13 @@
 package com.tally.steps.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
@@ -48,6 +57,17 @@ fun GoalRing(
     val safeGoal = goal.coerceAtLeast(1)
     val fraction = (steps.toFloat() / safeGoal).coerceIn(0f, 1f)
     val overflow = (steps - safeGoal).coerceAtLeast(0)
+    // Expressive motion (stable APIs): the sweep settles with a soft spring
+    // on every count update instead of snapping. Semantics report the true
+    // value; only the drawing animates.
+    val animatedFraction by animateFloatAsState(
+        targetValue = fraction,
+        animationSpec = spring(
+            stiffness = Spring.StiffnessMediumLow,
+            dampingRatio = 0.7f,
+        ),
+        label = "goalRing",
+    )
     val label = "${fmt.format(steps)} of ${fmt.format(goal)} steps" +
         if (overflow > 0) ", ${fmt.format(overflow)} over goal" else "" +
         if (paused) ", counting paused" else ""
@@ -83,15 +103,15 @@ fun GoalRing(
                         pathEffect = if (paused) PathEffect.dashPathEffect(floatArrayOf(12f, 10f)) else null,
                     ),
                 )
-                drawArc(
-                    color = if (overflow > 0) success else progress,
-                    startAngle = -90f,
-                    sweepAngle = 360f * fraction,
-                    useCenter = false,
-                    topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
-                    size = arcSize,
-                    style = Stroke(width = stroke, cap = StrokeCap.Round),
-                )
+            drawArc(
+                color = if (overflow > 0) success else progress,
+                startAngle = -90f,
+                sweepAngle = 360f * animatedFraction,
+                useCenter = false,
+                topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
             }
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -117,7 +137,16 @@ fun GoalRing(
                 )
             }
         }
-        if (overflow > 0) {
+        AnimatedVisibility(
+            visible = overflow > 0,
+            enter = fadeIn() + scaleIn(
+                animationSpec = spring(
+                    stiffness = Spring.StiffnessMediumLow,
+                    dampingRatio = 0.7f,
+                ),
+            ),
+            exit = fadeOut() + scaleOut(),
+        ) {
             Surface(
                 color = MaterialTheme.colorScheme.primary,
                 shape = RoundedCornerShape(999.dp),
