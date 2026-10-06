@@ -3,6 +3,7 @@ package com.tally.steps.ui.workout
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.tally.steps.TallyApp
 import com.tally.steps.data.PrefsStore
 import com.tally.steps.data.TallyDatabase
 import com.tally.steps.data.Workout
@@ -23,33 +24,17 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 /**
- * Access to the engine singletons.
- *
- * Engine access pattern (matches the engine agent's API): process-wide
- * singletons via getInstance(). If the app-surface owner ever adds
- * `repository`/`prefs` properties to TallyApp, those win — without this file
- * needing to change, and without anyone editing TallyApp from here.
+ * Access to the engine singletons. Direct cast: TallyApp (the manifest
+ * application) owns both singletons, so no reflection, no lookup cost on
+ * the composition path. Falls back to the process singletons for previews
+ * and tests running under a bare Application.
  */
 object EngineBridge {
     fun stepRepository(app: Application): StepRepository =
-        (runCatching {
-            val c = app.javaClass
-            val any = runCatching { c.getMethod("getRepository").invoke(app) }.getOrNull()
-                ?: runCatching {
-                    c.getDeclaredField("repository").apply { isAccessible = true }.get(app)
-                }.getOrNull()
-            any as? StepRepository
-        }.getOrNull()) ?: StepRepository.getInstance(app)
+        (app as? TallyApp)?.repository ?: StepRepository.getInstance(app)
 
     fun prefsStore(app: Application): PrefsStore =
-        (runCatching {
-            val c = app.javaClass
-            val any = runCatching { c.getMethod("getPrefs").invoke(app) }.getOrNull()
-                ?: runCatching {
-                    c.getDeclaredField("prefs").apply { isAccessible = true }.get(app)
-                }.getOrNull()
-            any as? PrefsStore
-        }.getOrNull()) ?: PrefsStore.getInstance(app)
+        (app as? TallyApp)?.prefs ?: PrefsStore.getInstance(app)
 
     /** Step length in cm for distance estimates; engine default 70 when unreadable. */
     suspend fun stepLengthCm(prefs: PrefsStore): Int =
