@@ -35,6 +35,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Invisible widget tap target: toggles pause, finishes. No UI, never in recents. -->
+        <activity
+            android:name=".widget.TogglePauseActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <service
             android:name=".engine.StepCounterService"
             android:exported="false"

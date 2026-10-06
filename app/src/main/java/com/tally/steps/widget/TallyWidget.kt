@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
@@ -32,6 +33,7 @@ import kotlinx.coroutines.launch
 
 private val CountKey = intPreferencesKey("today_steps")
 private val GoalKey = intPreferencesKey("today_goal")
+private val PausedKey = booleanPreferencesKey("today_paused")
 
 /**
  * S07 home-screen widget: today's count + goal. Tapping anywhere opens the app.
@@ -59,6 +61,7 @@ class TallyWidget : GlanceAppWidget() {
     private fun Content() {
         val steps = currentState(CountKey) ?: -1
         val goal = currentState(GoalKey) ?: 8000
+        val paused = currentState(PausedKey) ?: false
         val openApp = actionStartActivity(
             ComponentName(LocalContext.current, MainActivity::class.java),
         )
@@ -82,6 +85,21 @@ class TallyWidget : GlanceAppWidget() {
                     "${"█".repeat(filled)}${"░".repeat(10 - filled)} $pct% of $goal"
                 },
             )
+            if (steps >= 0) {
+                Text(
+                    text = if (paused) "Paused — tap to resume" else "Counting — tap to pause",
+                    modifier = GlanceModifier
+                        .padding(top = 4.dp)
+                        .clickable(
+                            actionStartActivity(
+                                ComponentName(
+                                    LocalContext.current,
+                                    TogglePauseActivity::class.java,
+                                ),
+                            ),
+                        ),
+                )
+            }
         }
     }
 
@@ -114,6 +132,8 @@ class TallyWidget : GlanceAppWidget() {
                                 this[CountKey] = day.steps
                                 this[GoalKey] = day.goal
                             }
+                            this[PausedKey] = runCatching { repo.paused().first() }
+                                .getOrDefault(false)
                         }
                     }
                     TallyWidget().update(context, id)
