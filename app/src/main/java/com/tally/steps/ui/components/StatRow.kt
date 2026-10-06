@@ -37,9 +37,17 @@ fun StatRow(
     distanceM: Float,
     kcal: Float,
     activeMin: Int,
+    units: String = "metric",
     modifier: Modifier = Modifier,
 ) {
-    val distanceText = if (distanceM >= 1000f) {
+    val distanceText = if (units == "imperial") {
+        val miles = distanceM / 1609.34f
+        if (miles >= 0.1f) {
+            String.format(Locale.US, "%.1f mi", miles)
+        } else {
+            "%d ft".format((distanceM * 3.28084f).toInt())
+        }
+    } else if (distanceM >= 1000f) {
         String.format(Locale.US, "%.1f km", distanceM / 1000f)
     } else {
         "${distanceM.toInt()} m"
@@ -124,7 +132,7 @@ private fun StatCell(
         )
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

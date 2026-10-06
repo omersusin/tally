@@ -23,26 +23,32 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -103,11 +109,23 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     ) {
         message?.let {
             Card(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = it,
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = vm::clearMessage,
+                        modifier = Modifier.then(MinTouch),
+                    ) { Text("Dismiss") }
+                }
             }
         }
 
@@ -118,7 +136,9 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 onValueChange = { vm.setGoal((it.toInt() / 500 * 500).coerceIn(1_000, 50_000)) },
                 valueRange = 1000f..50000f,
                 steps = 97,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Daily goal, $goal steps" },
             )
             Text(
                 "Your awards and streaks use this number. " +
@@ -241,14 +261,16 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                     "Off. Tally reads nothing."
                 },
                 checked = hcMode != "OFF",
-                onChecked = { on -> vm.setHcMode(if (on) "R" else "OFF") },
+                onChecked = { on ->
+                    vm.setHcMode(if (on) (if (hcMode == "RW") "RW" else "R") else "OFF")
+                },
             )
             ToggleRow(
                 title = "Share steps with Health Connect",
                 subtitle = if (hcMode == "RW") {
                     "On: other apps can read Tally's count."
                 } else {
-                    "Off. Nothing leaves Tally."
+                    "Off: read-only. Turning this on also turns read on."
                 },
                 checked = hcMode == "RW",
                 onChecked = { on -> vm.setHcMode(if (on) "RW" else "R") },
@@ -299,10 +321,30 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 checked = paused,
                 onChecked = vm::setPaused,
             )
+            var showClearConfirm by remember { mutableStateOf(false) }
             OutlinedButton(
-                onClick = vm::clearManual,
+                onClick = { showClearConfirm = true },
                 modifier = Modifier.fillMaxWidth().then(MinTouch),
             ) { Text("Clear today's manual corrections") }
+            if (showClearConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showClearConfirm = false },
+                    title = { Text("Clear manual corrections?") },
+                    text = { Text("Today's sensor steps stay. Only your manual fix goes back to 0.") },
+                    confirmButton = {
+                        TextButton(
+                            onClick = { showClearConfirm = false; vm.clearManual() },
+                            modifier = Modifier.then(MinTouch),
+                        ) { Text("Clear fix") }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { showClearConfirm = false },
+                            modifier = Modifier.then(MinTouch),
+                        ) { Text("Keep") }
+                    },
+                )
+            }
         }
 
         BatteryCard(
@@ -437,7 +479,10 @@ private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onCheck
 
 @Composable
 private fun NumberRow(label: String, unit: String, value: String, onDone: (String) -> Unit) {
-    var text by remember(value) { mutableStateOf(value) }
+    // Draft keyed on the field, committed on Done only; invalid input shows an
+    // error instead of silently dropping.
+    var text by remember(label) { mutableStateOf(value) }
+    var error by remember(label) { mutableStateOf<String?>(null) }
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -445,15 +490,27 @@ private fun NumberRow(label: String, unit: String, value: String, onDone: (Strin
     ) {
         OutlinedTextField(
             value = text,
-            onValueChange = { text = it },
+            onValueChange = {
+                text = it.filter { c -> c.isDigit() || c == '.' }.take(7)
+                error = null
+            },
             label = { Text("$label ($unit)") },
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Decimal,
                 imeAction = ImeAction.Done,
             ),
-            keyboardActions = KeyboardActions(onDone = { onDone(text) }),
+            keyboardActions = KeyboardActions(
+                onDone = {
+                    if (text.toFloatOrNull() == null) {
+                        error = "Enter a number like 170, then Done"
+                    } else {
+                        onDone(text)
+                    }
+                },
+            ),
             singleLine = true,
-            supportingText = { Text("Tap ✓ on the keyboard to save") },
+            isError = error != null,
+            supportingText = { Text(error ?: "Saved: $value · tap Done to apply") },
             modifier = Modifier.weight(1f),
         )
     }
@@ -565,17 +622,23 @@ private const val OemTestLine =
 
 @Composable
 private fun OemCard(brand: String, steps: List<String>, note: String?) {
-    var expanded by remember { mutableStateOf(false) }
-    Card(modifier = Modifier.fillMaxWidth()) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        HorizontalDivider()
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { expanded = !expanded }
-                .padding(12.dp),
+                .clickable(
+                    role = Role.Button,
+                    onClickLabel = if (expanded) "Hide $brand steps" else "Show $brand steps",
+                ) { expanded = !expanded }
+                .heightIn(min = 48.dp)
+                .padding(vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(brand, style = MaterialTheme.typography.titleSmall)
             Text(
-                if (expanded) "Tap to hide" else "Tap for steps",
+                if (expanded) "Hide" else "Show steps",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

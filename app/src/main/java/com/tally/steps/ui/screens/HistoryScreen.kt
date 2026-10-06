@@ -102,7 +102,7 @@ fun HistoryScreen(
             elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                WeekSummary(allDays = allDays)
+                WeekSummary(allDays = allDays, range = range)
                 BarChart(
                     days = visible,
                     selectedEpoch = selectedEpoch ?: visible.lastOrNull()?.epochDay,
@@ -115,18 +115,22 @@ fun HistoryScreen(
 
         StreakSummary(days = allDays)
 
-        WorkoutHistory()
+        WorkoutHistory(range = range)
     }
 }
 
 @Composable
 private fun WorkoutHistory(
+    range: HistoryRange,
     vm: HistoryViewModel = viewModel(),
 ) {
     val workouts by vm.workouts.collectAsStateWithLifecycle()
-    if (workouts.isEmpty()) return
-    val fmt = NumberFormat.getIntegerInstance()
     val zone = ZoneId.systemDefault()
+    val cutoff = LocalDate.now().minusDays(range.days.toLong() - 1)
+    val shown = workouts.filter {
+        Instant.ofEpochMilli(it.startMs).atZone(zone).toLocalDate() >= cutoff
+    }.take(10)
+    val fmt = NumberFormat.getIntegerInstance()
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
@@ -136,7 +140,19 @@ private fun WorkoutHistory(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(text = "Workouts", style = MaterialTheme.typography.titleMedium)
-            workouts.take(10).forEach { w ->
+            if (shown.isEmpty()) {
+                Text(
+                    text = if (workouts.isEmpty()) {
+                        "No workouts yet — finish one on the Workout tab and it lands here."
+                    } else {
+                        "No workouts in this range. Widen the range above to see older ones."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                return@Column
+            }
+            shown.forEach { w ->
                 val date = Instant.ofEpochMilli(w.startMs).atZone(zone).toLocalDate()
                     .format(DateTimeFormatter.ofPattern("EEE, MMM d"))
                 val mins = ((w.endMs - w.startMs - w.pausedMs) / 60_000L).coerceAtLeast(0)
@@ -227,25 +243,26 @@ private fun DayDetail(day: Day) {
     }
 }
 
-/** 7-day total + daily average + vs prior week. Plain totals, no judgement. */
+/** Window total + daily average + vs prior window. Plain totals, no judgement. */
 @Composable
-private fun WeekSummary(allDays: List<Day>) {
+private fun WeekSummary(allDays: List<Day>, range: HistoryRange) {
     val fmt = NumberFormat.getIntegerInstance()
+    val window = range.days
     val today = LocalDate.now().toEpochDay()
-    val last7 = allDays.filter { it.epochDay <= today }.takeLast(7)
-    if (last7.isEmpty()) return
-    val total = last7.sumOf { it.steps + it.manualDelta }
-    val avg = total / last7.size
-    val prior = allDays.filter { it.epochDay < (last7.firstOrNull()?.epochDay ?: today) }.takeLast(7)
+    val last = allDays.filter { it.epochDay <= today }.takeLast(window)
+    if (last.isEmpty()) return
+    val total = last.sumOf { it.steps + it.manualDelta }
+    val avg = total / last.size
+    val prior = allDays.filter { it.epochDay < (last.firstOrNull()?.epochDay ?: today) }.takeLast(window)
     val priorTotal = prior.sumOf { it.steps + it.manualDelta }
-    val delta = if (prior.size == 7 && priorTotal > 0) {
+    val delta = if (prior.size == window && priorTotal > 0) {
         val pct = ((total - priorTotal) * 100.0 / priorTotal).toInt()
-        if (pct == 0) "same as last week" else if (pct > 0) "+$pct% vs last week" else "$pct% vs last week"
+        if (pct == 0) "same as the $window before that" else if (pct > 0) "+$pct% vs prior $window days" else "$pct% vs prior $window days"
     } else {
         null
     }
     Text(
-        text = "Last 7 days: ${fmt.format(total)} steps · ~${fmt.format(avg)}/day" +
+        text = "Last $window days: ${fmt.format(total)} steps · about ${fmt.format(avg)}/day" +
             (delta?.let { " · $it" } ?: ""),
         style = MaterialTheme.typography.bodyMedium.tabulated(),
         color = MaterialTheme.colorScheme.onSurfaceVariant,

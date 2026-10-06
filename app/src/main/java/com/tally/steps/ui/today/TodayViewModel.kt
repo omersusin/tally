@@ -22,10 +22,14 @@ import kotlinx.coroutines.launch
 class TodayViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: StepRepository = (application as TallyApp).repository
+    private val prefs = (application as TallyApp).prefs
 
     val day: StateFlow<Day?> = repository.today()
         .map { it as Day? }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val units: StateFlow<String> = prefs.units
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "metric")
 
     val paused: StateFlow<Boolean> = repository.paused()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)

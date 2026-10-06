@@ -16,11 +16,14 @@ import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -81,6 +84,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TallyNav() {
     // Fresh install / grant path: BootReceiver only runs after a reboot, so
@@ -99,6 +103,14 @@ private fun TallyNav() {
     }
     val navController = rememberNavController()
     Scaffold(
+        topBar = {
+            val backStack by navController.currentBackStackEntryAsState()
+            val current = backStack?.destination
+            val title = Tabs.firstOrNull { tab ->
+                current?.hierarchy?.any { it.route == tab.route } == true
+            }?.label ?: "Tally"
+            TopAppBar(title = { Text(title) })
+        },
         bottomBar = {
             NavigationBar {
                 val backStack by navController.currentBackStackEntryAsState()
@@ -128,9 +140,33 @@ private fun TallyNav() {
             modifier = Modifier.padding(padding),
         ) {
             composable("today") { TodayScreen() }
-            composable("history") { HistoryScreen() }
+            composable("history") {
+                HistoryScreen(
+                    onGoToday = {
+                        navController.navigate("today") {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                )
+            }
             composable("workout") { WorkoutScreen() }
-            composable("awards") { AwardsScreen() }
+            composable("awards") {
+                AwardsScreen(
+                    onGoToday = {
+                        navController.navigate("today") {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                )
+            }
             composable("settings") { SettingsScreen() }
         }
     }

@@ -1,6 +1,5 @@
 package com.tally.steps.ui.components
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
@@ -11,9 +10,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,11 +27,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -42,6 +46,7 @@ import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.ScaleBarOverlay
 
@@ -49,12 +54,15 @@ import org.osmdroid.views.overlay.ScaleBarOverlay
  * S04 live route map (osmdroid, Apache-2.0 — OpenTracks pattern).
  * Display-only: fixes arrive from [com.tally.steps.engine.WorkoutGps], fed by
  * the step service inside a location-type foreground session, so the route
- * keeps recording with the screen off. Default tile cache on; follow mode
- * centers the FIRST fix only, then yields to the user until Recenter.
+ * keeps recording with the screen off. Default tile cache on.
  *
- * Honest offline note: map tiles need internet, tracking does not — the
- * polyline and step count keep recording with zero connectivity. Without
- * GPS the workout stays step-only (distance = steps × step length).
+ * Follow mode tracks the runner on every new fix and yields the moment a
+ * finger drags the map; the overlay Recenter button resumes it. The route
+ * draws in the theme accent at glanceable width with a start dot; a single
+ * fix draws a dot, not a blank map. Overlays redraw only when the point
+ * count changes — the per-second timer no longer rebuilds them.
+ *
+ * Honest offline note: map tiles need internet, tracking does not.
  */
 @Composable
 @Suppress("DEPRECATION") // setMapListener is the touch-gated follow switch on 6.1.20
@@ -66,13 +74,20 @@ fun WorkoutMap(
     val lifecycleOwner = LocalLifecycleOwner.current
     // Re-checked every composition: permission can flip mid-workout.
     val hasLoc = hasLocation(context)
+    val accent = MaterialTheme.colorScheme.primary
 
     // Stable holder: the AndroidView factory runs once, so listeners must
     // touch the holder — never a captured value.
     val mapHolder = remember { object { var view: MapView? = null } }
+    val drawHolder = remember {
+        object {
+            var drawn: Int = -1
+            var centered: GeoPoint? = null
+            var knownAt: Long = 0L
+        }
+    }
     val touchRef = remember { object { var down: Boolean = false } }
     var follow by remember { mutableStateOf(true) }
-    var firstFixCentered by remember { mutableStateOf(false) }
 
     // MapView has no Compose awareness: forward lifecycle or tiles never load.
     DisposableEffect(lifecycleOwner) {
@@ -88,20 +103,24 @@ fun WorkoutMap(
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
 
-    // New workout clears points: let the next first fix center again.
+    // New workout clears points: reset follow state for the next first fix.
     LaunchedEffect(points.isEmpty()) {
-        if (points.isEmpty()) firstFixCentered = false
+        if (points.isEmpty()) {
+            drawHolder.drawn = -1
+            drawHolder.centered = null
+        }
     }
 
     val statusText = when {
-        !hasLoc -> "Location permission needed — workout stays step-only until granted."
+        !hasLoc -> "Route off — grant location to draw it. Steps still count."
         points.isEmpty() -> "No GPS yet — steps still count."
-        else -> "GPS locked · ${points.size} points"
+        points.size == 1 -> "GPS found — move to draw the route."
+        else -> "Recording route · ${points.size} points"
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Box(
-            modifier = Modifier.fillMaxWidth().height(240.dp),
+            modifier = Modifier.fillMaxWidth().height(280.dp),
         ) {
             AndroidView(
                 factory = { ctx ->
@@ -125,7 +144,7 @@ fun WorkoutMap(
                         }
                         mapHolder.view = this
                         // Touch gate: only finger drags clear follow, so the
-                        // programmatic first-fix/Recenter moves never fight back.
+                        // programmatic follow/Recenter moves never fight back.
                         setOnTouchListener { _, ev ->
                             when (ev.action) {
                                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
@@ -142,24 +161,59 @@ fun WorkoutMap(
                                     return false
                                 }
 
-                                override fun onZoom(event: ZoomEvent?): Boolean = false
+                                override fun onZoom(event: ZoomEvent?): Boolean {
+                                    if (touchRef.down) follow = false
+                                    return false
+                                }
                             },
                         )
                     }
                 },
                 update = { map ->
-                    map.overlays.removeAll { it is Polyline }
-                    if (points.size >= 2) {
-                        val line = Polyline().apply {
-                            setPoints(points.map { GeoPoint(it.lat, it.lon) })
+                    val accentArgb = accent.toArgb()
+                    // Redraw overlays only when the route actually grew.
+                    if (points.size != drawHolder.drawn) {
+                        drawHolder.drawn = points.size
+                        map.overlays.removeAll { it is Polyline || it is Marker }
+                        if (points.size >= 2) {
+                            val line = Polyline().apply {
+                                setPoints(points.map { GeoPoint(it.lat, it.lon) })
+                                color = accentArgb
+                                width = 12f
+                            }
+                            map.overlays.add(line)
+                            val start = Marker(map).apply {
+                                position = GeoPoint(points.first().lat, points.first().lon)
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                title = "Start"
+                            }
+                            map.overlays.add(start)
+                        } else if (points.size == 1) {
+                            val dot = Marker(map).apply {
+                                position = GeoPoint(points.first().lat, points.first().lon)
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                title = "Current position"
+                            }
+                            map.overlays.add(dot)
                         }
-                        map.overlays.add(line)
                     }
-                    // FIRST fix only — never on every recomposition.
-                    if (follow && !firstFixCentered && points.isNotEmpty()) {
-                        val last = points.last()
-                        map.controller.animateTo(GeoPoint(last.lat, last.lon))
-                        firstFixCentered = true
+                    // Follow the runner on every new fix until a finger drags.
+                    val last = points.lastOrNull()?.let { GeoPoint(it.lat, it.lon) }
+                    if (follow && last != null && last != drawHolder.centered) {
+                        drawHolder.centered = last
+                        map.controller.animateTo(last)
+                    }
+                    // No fix yet: refresh last-known at most every 30s (cheap,
+                    // no recomposition storm — guarded by the timestamp).
+                    if (last == null && hasLoc && drawHolder.centered == null) {
+                        val now = System.currentTimeMillis()
+                        if (now - drawHolder.knownAt > 30_000L) {
+                            drawHolder.knownAt = now
+                            lastKnownPoint(context)?.let {
+                                map.controller.setZoom(LOCKED_ZOOM)
+                                map.controller.setCenter(it)
+                            }
+                        }
                     }
                     map.invalidate()
                 },
@@ -178,43 +232,48 @@ fun WorkoutMap(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 )
             }
+            Button(
+                onClick = {
+                    follow = true
+                    val target = points.lastOrNull()?.let { GeoPoint(it.lat, it.lon) }
+                        ?: lastKnownPoint(context)
+                    val ctrl = mapHolder.view?.controller ?: return@Button
+                    if (target != null) {
+                        drawHolder.centered = target
+                        ctrl.setZoom(LOCKED_ZOOM)
+                        ctrl.animateTo(target)
+                    } else {
+                        ctrl.setZoom(WORLD_ZOOM)
+                        ctrl.setCenter(WORLD_CENTER)
+                    }
+                },
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(12.dp)
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Recenter map on my location" },
+            ) {
+                Icon(Icons.Filled.MyLocation, contentDescription = null)
+                Text(
+                    text = "Recenter",
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+            Text(
+                text = "© OpenStreetMap",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.BottomStart)
+                    .background(
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                    )
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            )
         }
         Text(
-            text = statusText,
+            text = "$statusText Tiles need internet — tracking does not.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text(
-            text = "Map tiles need internet — tracking does not. " +
-                "No GPS? This workout stays step-only " +
-                "(distance = steps × step length).",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = "Map © OpenStreetMap contributors (ODbL).",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Button(
-            onClick = {
-                follow = true
-                val target = points.lastOrNull()?.let { GeoPoint(it.lat, it.lon) }
-                    ?: lastKnownPoint(context)
-                val ctrl = mapHolder.view?.controller ?: return@Button
-                if (target != null) {
-                    ctrl.setZoom(LOCKED_ZOOM)
-                    ctrl.animateTo(target)
-                } else {
-                    ctrl.setZoom(WORLD_ZOOM)
-                    ctrl.setCenter(WORLD_CENTER)
-                }
-            },
-            modifier = Modifier.size(48.dp)
-                .semantics { contentDescription = "Recenter map on my location" },
-        ) {
-            Text(text = "⌖")
-        }
     }
 }
 
@@ -225,10 +284,10 @@ private const val WORLD_ZOOM = 2.0
 
 private fun hasLocation(context: Context): Boolean =
     ContextCompat.checkSelfPermission(
-        context, Manifest.permission.ACCESS_FINE_LOCATION,
+        context, android.Manifest.permission.ACCESS_FINE_LOCATION,
     ) == PackageManager.PERMISSION_GRANTED ||
         ContextCompat.checkSelfPermission(
-            context, Manifest.permission.ACCESS_COARSE_LOCATION,
+            context, android.Manifest.permission.ACCESS_COARSE_LOCATION,
         ) == PackageManager.PERMISSION_GRANTED
 
 /**

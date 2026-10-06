@@ -100,6 +100,8 @@ data class WorkoutUiState(
     val sessionSteps: Int = 0,
     val elapsedMs: Long = 0L,
     val pausedMs: Long = 0L,
+    /** When PAUSED: wall-clock the current pause began; null otherwise. Drives the live paused clock. */
+    val pauseBeganMs: Long? = null,
     val autoPaused: Boolean = false,
     val distanceM: Float = 0f,
     /** 0..1 progress toward the target, or null for Free. */
@@ -178,6 +180,12 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Granted location mid-session: join the service pipe from here, keeping steps. */
+    fun retryGps() {
+        if (_ui.value.phase != WorkoutUiState.Phase.ACTIVE) return
+        startGpsPipe()
+    }
+
     /** Service pipe: fixes flow even with the screen off (location-type FGS). */
     private fun startGpsPipe() {
         gpsJob?.cancel()
@@ -242,17 +250,33 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
         if (s.phase != WorkoutUiState.Phase.ACTIVE) return
         ticker?.cancel()
         tracker.pause(System.currentTimeMillis())
-        _ui.value = s.copy(phase = WorkoutUiState.Phase.PAUSED, autoPaused = byAutoBreak)
+        _ui.value = s.copy(
+            phase = WorkoutUiState.Phase.PAUSED,
+            autoPaused = byAutoBreak,
+            pauseBeganMs = System.currentTimeMillis(),
+        )
+        // Live paused clock: the displayed paused time ticks every second, so
+        // Finish shows exactly what the user watched — no surprise totals.
+        ticker = viewModelScope.launch {
+            while (true) {
+                delay(1000L)
+                val cur = _ui.value
+                if (cur.phase != WorkoutUiState.Phase.PAUSED) break
+                _ui.value = cur.copy(pausedMs = cur.pausedMs + 1000L)
+            }
+        }
     }
 
     fun resume() {
         val s = _ui.value
         if (s.phase != WorkoutUiState.Phase.PAUSED) return
         val now = System.currentTimeMillis()
+        ticker?.cancel()
         tracker.resume(now)
+        // pausedMs is already complete (ticked live while paused): just clear the marker.
         _ui.value = s.copy(
             phase = WorkoutUiState.Phase.ACTIVE,
-            pausedMs = s.pausedMs + (now - activeSinceMs).coerceAtLeast(0L),
+            pauseBeganMs = null,
             autoPaused = false,
         )
         activeSinceMs = now
@@ -268,12 +292,8 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
         ticker?.cancel()
         viewModelScope.launch {
             val now = System.currentTimeMillis()
-            // Finishing while paused: include the trailing paused stretch.
-            val pausedMs = if (s.phase == WorkoutUiState.Phase.PAUSED) {
-                s.pausedMs + (now - activeSinceMs).coerceAtLeast(0L)
-            } else {
-                s.pausedMs
-            }
+            // pausedMs is already complete: the paused ticker advanced it live,
+            // and resume() banks it before returning to ACTIVE. Nothing to add.
             val steps = s.sessionSteps
             val distM = s.distanceM
             val summary = WorkoutSummary(
@@ -281,7 +301,7 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
                 startMs = sessionStartMs,
                 endMs = now,
                 elapsedMs = s.elapsedMs,
-                pausedMs = pausedMs,
+                pausedMs = s.pausedMs,
                 steps = steps,
                 distanceM = distM,
                 targetHit = s.targetHit,
@@ -294,6 +314,15 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun reset() {
+        ticker?.cancel()
+        tracker.clear()
+        stopGpsPipe()
+        viewModelScope.launch { runCatching { repo.setRideActive(false) } }
+        _ui.value = WorkoutUiState(config = _ui.value.config)
+    }
+
+    /** Discard the live session without saving: for accidental 0-step starts. */
+    fun discard() {
         ticker?.cancel()
         tracker.clear()
         stopGpsPipe()
