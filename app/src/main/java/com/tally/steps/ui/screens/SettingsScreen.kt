@@ -1,7 +1,6 @@
 package com.tally.steps.ui.screens
 
 import android.app.Application
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -116,9 +115,9 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
             Text("$goal steps a day", style = MaterialTheme.typography.bodyLarge)
             Slider(
                 value = goal.toFloat(),
-                onValueChange = { vm.setGoal(it.toInt()) },
-                valueRange = 1000f..20000f,
-                steps = 18,
+                onValueChange = { vm.setGoal((it.toInt() / 500 * 500).coerceIn(1_000, 50_000)) },
+                valueRange = 1000f..50000f,
+                steps = 97,
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
@@ -216,8 +215,8 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                "Sensitivity only affects the fallback sensor and workout rhythm. " +
-                    "It never rewrites your phone's own step counter.",
+                "Sensitivity sets how much movement makes a minute count as " +
+                    "active. It never changes your step count.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -361,6 +360,18 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth().then(MinTouch),
             ) { Text("Restore from backup") }
+        }
+
+        Section("Intro") {
+            Text(
+                "Replay the first-run pages any time — permissions, battery setup, how counting works.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = vm::replayIntro,
+                modifier = Modifier.fillMaxWidth().then(MinTouch),
+            ) { Text("Show intro again") }
         }
     }
 }
@@ -602,19 +613,18 @@ private fun openBatteryExemption(context: Context): Boolean {
     if (runCatching { pm.isIgnoringBatteryOptimizations(context.packageName) }.getOrDefault(false)) {
         return true
     }
-    val direct = Intent(
-        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-        Uri.parse("package:${context.packageName}"),
-    )
+    // No REQUEST_IGNORE_BATTERY_OPTIMIZATIONS permission (Play-restricted):
+    // open the system list and let the user pick Tally. NEW_TASK because the
+    // context may not be an Activity.
     return try {
-        context.startActivity(direct)
-        false // user decides in the system dialog; card re-checks next visit
-    } catch (e: ActivityNotFoundException) {
-        try {
-            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-        } catch (e2: ActivityNotFoundException) {
-            // No battery settings on this device; nothing more we can honestly do.
-        }
+        context.startActivity(
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+        )
+        false // user decides in system settings; card re-checks next visit
+    } catch (e: Exception) {
+        // No battery settings on this device; nothing more we can honestly do.
         false
     }
 }

@@ -52,13 +52,14 @@ fun HistoryScreen(
 ) {
     val allDays by vm.days.collectAsStateWithLifecycle()
     var range by rememberSaveable { mutableStateOf(HistoryRange.WEEK) }
+    // Reset the selection whenever the range changes (rememberSaveable keyed on range).
+    var selectedEpoch by rememberSaveable(range) { mutableStateOf<Long?>(null) }
 
     val visible: List<Day> = when (range) {
-        HistoryRange.DAY -> allDays.takeLast(1)
         HistoryRange.WEEK -> allDays.takeLast(7)
         HistoryRange.MONTH -> allDays.takeLast(30)
     }
-    val detail: Day? = visible.lastOrNull()
+    val detail: Day? = visible.find { it.epochDay == selectedEpoch } ?: visible.lastOrNull()
 
     if (allDays.isEmpty()) {
         Column(
@@ -101,7 +102,12 @@ fun HistoryScreen(
             elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                BarChart(days = visible)
+                WeekSummary(allDays = allDays)
+                BarChart(
+                    days = visible,
+                    selectedEpoch = selectedEpoch ?: visible.lastOrNull()?.epochDay,
+                    onSelect = { selectedEpoch = it },
+                )
             }
         }
 
@@ -149,10 +155,9 @@ private fun WorkoutHistory(
 @Composable
 private fun DayDetail(day: Day) {
     val fmt = NumberFormat.getIntegerInstance()
-    val zone = ZoneId.systemDefault()
-    val date = Instant.ofEpochMilli(day.epochDay * 86_400_000L)
-        .atZone(zone).toLocalDate()
-        .format(DateTimeFormatter.ofPattern("EEE, MMM d"))
+    val date = runCatching {
+        LocalDate.ofEpochDay(day.epochDay).format(DateTimeFormatter.ofPattern("EEE, MMM d"))
+    }.getOrDefault("")
     val context = LocalContext.current
     val repo = remember { EngineBridge.stepRepository(context.applicationContext as Application) }
     val scope = rememberCoroutineScope()
@@ -222,6 +227,30 @@ private fun DayDetail(day: Day) {
     }
 }
 
+/** 7-day total + daily average + vs prior week. Plain totals, no judgement. */
+@Composable
+private fun WeekSummary(allDays: List<Day>) {
+    val fmt = NumberFormat.getIntegerInstance()
+    val today = LocalDate.now().toEpochDay()
+    val last7 = allDays.filter { it.epochDay <= today }.takeLast(7)
+    if (last7.isEmpty()) return
+    val total = last7.sumOf { it.steps + it.manualDelta }
+    val avg = total / last7.size
+    val prior = allDays.filter { it.epochDay < (last7.firstOrNull()?.epochDay ?: today) }.takeLast(7)
+    val priorTotal = prior.sumOf { it.steps + it.manualDelta }
+    val delta = if (prior.size == 7 && priorTotal > 0) {
+        val pct = ((total - priorTotal) * 100.0 / priorTotal).toInt()
+        if (pct == 0) "same as last week" else if (pct > 0) "+$pct% vs last week" else "$pct% vs last week"
+    } else {
+        null
+    }
+    Text(
+        text = "Last 7 days: ${fmt.format(total)} steps · ~${fmt.format(avg)}/day" +
+            (delta?.let { " · $it" } ?: ""),
+        style = MaterialTheme.typography.bodyMedium.tabulated(),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
 /** Status text, never color-only: "5-day streak" or the honest no-streak line. */
 @Composable
 private fun StreakSummary(days: List<Day>) {

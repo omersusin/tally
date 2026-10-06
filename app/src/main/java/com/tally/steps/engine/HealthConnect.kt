@@ -192,6 +192,11 @@ class HealthConnect {
             )
             if (!end.isAfter(start)) return@runCatching false
             val range = TimeRangeFilter.between(start, end)
+            // Re-check the write grant immediately before the destructive
+            // half: a revoke between syncHealth's check and this delete would
+            // otherwise wipe our HC courtesy copy with no insert after it.
+            // (Local Room data is never at risk — HC is a copy, not the truth.)
+            if (!hasWritePermission(context)) return@runCatching false
             client.deleteRecords(StepsRecord::class, range)
             val device = Device(
                 type = Device.TYPE_PHONE,

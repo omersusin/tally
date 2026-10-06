@@ -24,10 +24,14 @@ import org.json.JSONObject
  */
 object BackupExport {
     const val CSV_HEADER =
+        "epochDay,date,steps,distanceM,kcal,activeMin,goal,manualDelta,source,updatedAt,restDay,floors"
+    private const val CSV_HEADER_V2 =
         "epochDay,date,steps,distanceM,kcal,activeMin,goal,manualDelta,source,updatedAt,restDay"
     private const val CSV_HEADER_V1 =
         "epochDay,date,steps,distanceM,kcal,activeMin,goal,manualDelta,source,updatedAt"
-    private const val BACKUP_VERSION = 2
+    private const val WORKOUT_HEADER =
+        "id,type,startMs,endMs,steps,distanceM,pausedMs,gpsPolyline"
+    private const val BACKUP_VERSION = 3
 
     // ---------- export ----------
 
@@ -48,6 +52,25 @@ object BackupExport {
                     csvCell(sanitizeForCsv(d.source)),
                     d.updatedAt.toString(),
                     if (d.restDay) "1" else "0",
+                    d.floors.toString(),
+                ).joinToString(","),
+            )
+        }
+    }
+
+    fun workoutsToCsv(workouts: List<com.tally.steps.data.Workout>): String = buildString {
+        appendLine(WORKOUT_HEADER)
+        workouts.sortedBy { it.startMs }.take(MAX_WORKOUT_ROWS).forEach { w ->
+            appendLine(
+                listOf(
+                    csvCell(sanitizeForCsv(w.id)),
+                    csvCell(sanitizeForCsv(w.type)),
+                    w.startMs.toString(),
+                    w.endMs.toString(),
+                    w.steps.toString(),
+                    w.distanceM.toString(),
+                    w.pausedMs.toString(),
+                    csvCell(w.gpsPolyline ?: ""),
                 ).joinToString(","),
             )
         }
@@ -63,7 +86,12 @@ object BackupExport {
 
     // ---------- backup ----------
 
-    suspend fun backup(context: Context, days: List<Day>, prefs: Map<String, String>): File =
+    suspend fun backup(
+        context: Context,
+        days: List<Day>,
+        prefs: Map<String, String>,
+        workouts: List<com.tally.steps.data.Workout> = emptyList(),
+    ): File =
         withContext(Dispatchers.IO) {
             val dir = tallyDir(context)
             val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
@@ -73,11 +101,15 @@ object BackupExport {
                 .put("version", BACKUP_VERSION)
                 .put("exportedAt", System.currentTimeMillis())
                 .put("dayCount", days.size)
+                .put("workoutCount", workouts.size.coerceAtMost(MAX_WORKOUT_ROWS))
                 .put("app", context.packageName)
                 .toString(2)
             ZipOutputStream(file.outputStream().buffered()).use { zip ->
                 zip.putNextEntry(ZipEntry("days.csv"))
                 zip.write(daysToCsv(days).toByteArray())
+                zip.closeEntry()
+                zip.putNextEntry(ZipEntry("workouts.csv"))
+                zip.write(workoutsToCsv(workouts).toByteArray())
                 zip.closeEntry()
                 zip.putNextEntry(ZipEntry("prefs.json"))
                 zip.write(prefsJson.toByteArray())
@@ -94,10 +126,15 @@ object BackupExport {
     sealed interface RestoreOutcome {
         val userMessage: String
 
-        data class Success(val days: List<RestoredDay>, val prefs: Map<String, String>) :
-            RestoreOutcome {
+        data class Success(
+            val days: List<RestoredDay>,
+            val prefs: Map<String, String>,
+            val workouts: List<RestoredWorkout> = emptyList(),
+        ) : RestoreOutcome {
             override val userMessage =
-                "Backup checked: ${days.size} day(s) look valid. See Settings for what was applied."
+                "Backup checked: ${days.size} day(s)" +
+                    (if (workouts.isNotEmpty()) " + ${workouts.size} workout(s)" else "") +
+                    " look valid. See Settings for what was applied."
         }
 
         data class Invalid(val errors: List<String>) : RestoreOutcome {
@@ -118,8 +155,22 @@ object BackupExport {
         val manualDelta: Int,
         val source: String,
         val updatedAt: Long,
-        /** v2 only; v1 backups restore as false. */
+        /** v2+ only; v1 backups restore as false. */
         val restDay: Boolean,
+        /** v3+ only; older backups restore as 0. */
+        val floors: Int = 0,
+    )
+
+    /** Validated workout row (v3+ backups carry workouts.csv; older backups have none). */
+    data class RestoredWorkout(
+        val id: String,
+        val type: String,
+        val startMs: Long,
+        val endMs: Long,
+        val steps: Int,
+        val distanceM: Float,
+        val pausedMs: Long,
+        val gpsPolyline: String?,
     )
 
     suspend fun restore(context: Context, uri: Uri): RestoreOutcome = withContext(Dispatchers.IO) {
@@ -136,7 +187,7 @@ object BackupExport {
                 listOf("That file is too large (over 5 MB) — nothing was changed."),
             )
         } catch (e: Exception) {
-            RestoreOutcome.Invalid(listOf("Could not open it as a ZIP file (${e.message})."))
+            RestoreOutcome.Invalid(listOf("Could not open it as a ZIP file."))
         } finally {
             tmp.delete()
         }
@@ -164,7 +215,7 @@ object BackupExport {
                     ?: return RestoreOutcome.Invalid(
                         listOf("days.csv is missing — is this a Tally backup?"),
                     )
-                // v1 files predate rest days; v2 carries the restDay column.
+                // v1 files predate rest days; v2 adds restDay; v3 adds floors + workouts.csv.
                 var backupVersion = 1
                 val metaEntry = zip.getEntry("meta.json")
                 if (metaEntry != null) {
@@ -172,7 +223,7 @@ object BackupExport {
                         JSONObject(zip.getInputStream(metaEntry).use { it.readTextCapped(MAX_BACKUP_BYTES) })
                     }.getOrNull()
                     val version = meta?.optInt("version", -1) ?: -1
-                    if (version != 1 && version != BACKUP_VERSION) {
+                    if (version !in 1..BACKUP_VERSION) {
                         return RestoreOutcome.Invalid(
                             listOf("Backup version $version is not supported (this app reads v1–v$BACKUP_VERSION)."),
                         )
@@ -183,6 +234,17 @@ object BackupExport {
                 val days = parseAndValidateCsv(csvText, errors, backupVersion)
                 if (errors.isNotEmpty() || days == null) {
                     return RestoreOutcome.Invalid(errors.ifEmpty { listOf("days.csv is empty.") })
+                }
+                val workouts = if (backupVersion >= 3) {
+                    val wEntry = zip.getEntry("workouts.csv")
+                    if (wEntry == null) {
+                        emptyList()
+                    } else {
+                        val wText = zip.getInputStream(wEntry).use { it.readTextCapped(MAX_BACKUP_BYTES) }
+                        parseAndValidateWorkouts(wText, errors) ?: return RestoreOutcome.Invalid(errors)
+                    }
+                } else {
+                    emptyList()
                 }
                 val prefs = mutableMapOf<String, String>()
                 zip.getEntry("prefs.json")?.let { entry ->
@@ -198,14 +260,14 @@ object BackupExport {
                     }
                 }
                 if (errors.isNotEmpty()) return RestoreOutcome.Invalid(errors)
-                return RestoreOutcome.Success(days, prefs)
+                return RestoreOutcome.Success(days, prefs, workouts)
             }
         } catch (e: SizeCapExceeded) {
             return RestoreOutcome.Invalid(
                 listOf("That backup would inflate past 5 MB — nothing was changed."),
             )
         } catch (e: Exception) {
-            return RestoreOutcome.Invalid(listOf("Could not read the backup (${e.message})."))
+            return RestoreOutcome.Invalid(listOf("Could not read the backup."))
         }
     }
 
@@ -228,7 +290,11 @@ object BackupExport {
             errors += "The file is empty."
             return null
         }
-        val expectedHeader = if (backupVersion >= 2) CSV_HEADER else CSV_HEADER_V1
+        val expectedHeader = when {
+            backupVersion >= 3 -> CSV_HEADER
+            backupVersion == 2 -> CSV_HEADER_V2
+            else -> CSV_HEADER_V1
+        }
         if (lines.first().trim() != expectedHeader) {
             errors += "First line must be the Tally header: $expectedHeader."
             return null
@@ -243,7 +309,11 @@ object BackupExport {
                 return null
             }
             val cells = splitCsv(raw)
-            val wantCols = if (backupVersion >= 2) 11 else 10
+            val wantCols = when {
+                backupVersion >= 3 -> 12
+                backupVersion == 2 -> 11
+                else -> 10
+            }
             if (cells.size != wantCols) {
                 errors += "Line $lineNo: expected $wantCols columns, found ${cells.size}."
                 return@forEachIndexed
@@ -274,6 +344,16 @@ object BackupExport {
                 } else {
                     false
                 }
+                val floors = if (backupVersion >= 3) {
+                    val f = cells[11].toIntOrNull()
+                    if (f == null || f < 0 || f > 10_000) {
+                        errors += "Line $lineNo: $f floors is impossible."
+                        return@forEachIndexed
+                    }
+                    f
+                } else {
+                    0
+                }
                 val expectedDate = runCatching { LocalDate.ofEpochDay(epochDay).toString() }
                     .getOrNull()
                 when {
@@ -299,7 +379,7 @@ object BackupExport {
                         errors += "Line $lineNo: day $epochDay appears twice."
                     else -> out += RestoredDay(
                         epochDay, steps, distanceM, kcal, activeMin,
-                        goal, manualDelta, source, updatedAt, restDay,
+                        goal, manualDelta, source, updatedAt, restDay, floors,
                     )
                 }
             } catch (e: NumberFormatException) {
@@ -322,11 +402,15 @@ object BackupExport {
 
     private const val MAX_RESTORE_ROWS = 5000
     private const val MAX_ERRORS = 20
+    /** Workouts are capped separately: routes are the bulky part of a backup. */
+    private const val MAX_WORKOUT_ROWS = 500
     /** Total inflated-size cap for a restore (zip-bomb guard), enforced before parse. */
     private const val MAX_BACKUP_BYTES = 5L * 1024 * 1024
     private const val MAX_ZIP_ENTRIES = 64
     /** Absurd manual corrections are rejected; StepRepository clamps defensively too. */
     private const val MANUAL_DELTA_ABS_MAX = 100_000
+    /** Longest route kept per workout: ~50k fixes, far past any real session. */
+    private const val MAX_POLYLINE_CHARS = 1_000_000
     private val FORMULA_TRIGGERS = setOf('=', '+', '-', '@')
 
     /** Thrown when any restore stream exceeds [MAX_BACKUP_BYTES]. */
@@ -371,6 +455,76 @@ object BackupExport {
         } else {
             value
         }
+
+    /**
+     * All-or-nothing workout validation (v3+). Missing/empty workouts.csv is
+     * NOT an error — callers treat that as "no workouts backed up".
+     */
+    fun parseAndValidateWorkouts(
+        text: String,
+        errors: MutableList<String>,
+    ): List<RestoredWorkout>? {
+        val lines = text.lines().filter { it.isNotBlank() }
+        if (lines.isEmpty()) return emptyList()
+        if (lines.first().trim() != WORKOUT_HEADER) {
+            errors += "workouts.csv header is not a Tally workout header."
+            return null
+        }
+        val out = mutableListOf<RestoredWorkout>()
+        val seen = mutableSetOf<String>()
+        val validTypes = setOf("walk", "run", "hike", "ride", "treadmill")
+        lines.drop(1).take(MAX_WORKOUT_ROWS + 1).forEachIndexed { index, raw ->
+            val lineNo = index + 2
+            if (out.size > MAX_WORKOUT_ROWS) {
+                errors += "More than $MAX_WORKOUT_ROWS workouts — file too large."
+                return null
+            }
+            val cells = splitCsv(raw)
+            if (cells.size != 8) {
+                errors += "Workout line $lineNo: expected 8 columns, found ${cells.size}."
+                return@forEachIndexed
+            }
+            try {
+                val id = cells[0]
+                val type = cells[1].lowercase()
+                val startMs = cells[2].toLong()
+                val endMs = cells[3].toLong()
+                val steps = cells[4].toInt()
+                val distanceM = cells[5].toFloat()
+                val pausedMs = cells[6].toLong()
+                val poly = cells[7].ifBlank { null }?.take(MAX_POLYLINE_CHARS)
+                when {
+                    id.isBlank() || id.length > 100 ->
+                        errors += "Workout line $lineNo: bad id."
+                    !seen.add(id) ->
+                        errors += "Workout line $lineNo: id appears twice."
+                    type !in validTypes ->
+                        errors += "Workout line $lineNo: unknown type $type."
+                    startMs <= 0 || endMs <= startMs ->
+                        errors += "Workout line $lineNo: bad timestamps."
+                    steps < 0 || steps > 500_000 ->
+                        errors += "Workout line $lineNo: $steps steps is impossible."
+                    distanceM < 0 || distanceM > 500_000 ->
+                        errors += "Workout line $lineNo: bad distance."
+                    pausedMs < 0 || pausedMs > (endMs - startMs) ->
+                        errors += "Workout line $lineNo: bad paused time."
+                    else -> out += RestoredWorkout(
+                        id, type, startMs, endMs, steps, distanceM, pausedMs, poly,
+                    )
+                }
+            } catch (e: NumberFormatException) {
+                errors += "Workout line $lineNo: a number is not a number."
+            } catch (e: Exception) {
+                errors += "Workout line $lineNo: unreadable."
+            }
+            if (errors.size >= MAX_ERRORS) return null
+        }
+        if (lines.size - 1 > MAX_WORKOUT_ROWS) {
+            errors += "More than $MAX_WORKOUT_ROWS workouts — file too large."
+            return null
+        }
+        return if (errors.isEmpty()) out else null
+    }
 
     /** Minimal CSV split supporting quoted cells with "" escapes. */
     fun splitCsv(line: String): List<String> {

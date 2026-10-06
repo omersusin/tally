@@ -1,25 +1,28 @@
 feature,area,priority,original,clone,notes
-live step count,today,must,yes,no,TYPE_STEP_COUNTER + Health Connect merge
-daily goal ring,today,must,yes,no,celebration on reach
-distance/kcal/active estimates,today,must,yes,no,personal metrics based
-midnight rollover + reboot recovery,engine,must,yes,no,BootReceiver + WorkManager
-battery-exemption + OEM autostart prompt,engine,must,partial,no,Stride lacks this; #1 killer fix
-offline-first no-login,trust,must,partial,no,Room + local backup
-sensitivity setting,accuracy,must,partial,no,Accupedo-style; fixes over/under-count
-day/week/month charts,history,must,yes,no,
-streaks + awards,engage,must,yes,no,
-home widget + notification count,glance,must,partial,no,Glance widget + persistent notif
-manual step edit/delete,trust,should,no,no,users ask by name
-treadmill/indoor mode,workout,should,no,no,asked by name; step-only no GPS
-GPS workout walk/run/hike/ride,workout,should,yes,no,opt-in; step fallback if denied
-pause/resume + auto-break,workout,should,partial,no,
-export CSV/PDF + backup/restore,trust,should,partial,no,prevents history-loss anger
-Health Connect sync,ecosystem,should,yes,no,read+write without double-count
-units + theme + AMOLED,settings,should,yes,no,
-goal adaptive suggestions,engage,could,no,yes,median-of-7 nudge card, quiet, local only
-challenges/streak repair,engage,could,partial,yes,rest-day repair 1 per week, local only
-drive/cycle false-positive veto,accuracy,must,no,yes,hold baseline in vehicle, honest note
-barometer floors,engage,should,no,yes,stair climbs only, sensor-gated
-pace projection,today,should,no,yes,on-pace-for-midnight + goal ETA, quiet
-OEM survival guides,engine,must,partial,yes,dontkillmyapp exact paths per brand
-Health Connect hardening,ecosystem,should,partial,yes,aggregate-only, dual origin, bg-perm gate
+live step count,today,must,yes,yes,TYPE_STEP_COUNTER + Health Connect merge
+daily goal ring,today,must,yes,yes,count merged into ring center + overflow pill
+distance/kcal/active estimates,today,must,yes,yes,personal metrics based
+midnight rollover + reboot recovery,engine,must,yes,yes,BootReceiver + WorkManager + LOCKED_BOOT/QUICKBOOT
+battery-exemption + OEM autostart prompt,engine,must,partial,yes,settings-list intent (no restricted perm) + per-brand guides
+offline-first no-login,trust,must,partial,yes,Room + local backup + allowBackup=false
+sensitivity setting,accuracy,must,partial,yes,L/M/H gates active minutes; honest copy
+day/week/month charts,history,must,yes,yes,tappable rows select day detail; weekly totals + vs-last-week
+streaks + awards,engage,must,yes,yes,rest-aware badges match streak card
+home widget + notification count,glance,must,partial,yes,Glance widget with progress bar + persistent notif with pause
+manual step edit,today,should,no,yes,±100 + custom-amount dialog (commit on confirm)
+treadmill/indoor mode,workout,should,no,yes,step-only no GPS + RIDE veto exemption
+GPS workout walk/run/hike/ride,workout,should,yes,yes,opt-in; service-owned location FGS survives screen-off
+pause/resume + auto-break,workout,should,partial,yes,60s no-step auto-pause
+export CSV/PDF + backup/restore,trust,should,partial,yes,v3 backup: days + floors + workouts + prefs; GPX per workout
+Health Connect sync,ecosystem,should,yes,yes,read+write without double-count; re-checks grant before delete
+units + theme + AMOLED,settings,should,yes,yes,metric/imperial + light/dark/true-black
+goal adaptive suggestions,engage,could,no,yes,median-of-7 nudge card quiet local only
+challenges/streak repair,engage,could,partial,yes,rest-day repair 1 per week incl. zero-row days local only
+drive/cycle false-positive veto,accuracy,must,no,yes,AR + GPS-speed veto; RIDE sessions exempt
+barometer floors,engage,should,no,yes,stair climbs only sensor-gated
+pace projection,today,should,no,yes,on-pace-for-midnight + goal ETA quiet
+OEM survival guides,engine,must,partial,yes,dontkillmyapp exact paths per brand + intro replay in Settings
+Health Connect hardening,ecosystem,should,partial,yes,aggregate-only dual origin bg-perm gate
+per-day history correction,trust,should,no,no,SKIPPED: today-fix + rest repair cover honest cases; add when asked
+Wear OS tile,glance,could,no,no,SKIPPED: add when users ask; widget + notification cover glance
+social/challenges backend,engage,could,yes,no,SKIPPED: needs our own backend; local badges instead (privacy angle)

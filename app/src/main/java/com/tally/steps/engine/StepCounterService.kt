@@ -15,6 +15,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -31,6 +33,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -49,6 +52,8 @@ class StepCounterService : Service() {
     private var dateRegistered = false
     private var vetoRegistered = false
     private var vetoPendingIntent: PendingIntent? = null
+    /** Workout route listener (location-type FGS while a session is ACTIVE). */
+    private var workoutListener: LocationListener? = null
     /** Activities currently ENTERed per AR transitions; non-empty = veto. Main-thread only. */
     private val vetoActivities = mutableSetOf<Int>()
     /**
@@ -118,6 +123,14 @@ class StepCounterService : Service() {
             }
             ACTION_RESUME -> {
                 scope.launch { runCatching { repo.setPaused(false) } }
+                return START_STICKY
+            }
+            ACTION_WORKOUT_START -> {
+                startWorkoutTracking()
+                return START_STICKY
+            }
+            ACTION_WORKOUT_STOP -> {
+                stopWorkoutTracking()
                 return START_STICKY
             }
         }
@@ -199,10 +212,17 @@ class StepCounterService : Service() {
                 .invoke(client, pi)
         }
         vetoPendingIntent = null
-        val sm = getSystemService(SENSOR_SERVICE) as SensorManager
-        listener?.let { sm.unregisterListener(it) }
+        WorkoutGps.setActive(false)
+        workoutListener?.let { l ->
+            runCatching { (getSystemService(LOCATION_SERVICE) as? LocationManager)?.removeUpdates(l) }
+        }
+        workoutListener = null
+        runCatching {
+            val sm = getSystemService(SENSOR_SERVICE) as? SensorManager ?: return@runCatching
+            listener?.let { sm.unregisterListener(it) }
+            baroListener?.let { sm.unregisterListener(it) }
+        }
         listener = null
-        baroListener?.let { sm.unregisterListener(it) }
         baroListener = null
         scope.cancel()
         super.onDestroy()
@@ -226,10 +246,11 @@ class StepCounterService : Service() {
 
     private fun registerSensor() {
         if (listener != null) return
-        val sm = getSystemService(SENSOR_SERVICE) as SensorManager
+        val sm = getSystemService(SENSOR_SERVICE) as? SensorManager ?: return
         val sensor = sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) ?: return
         val l = object : SensorEventListener {
-            override fun onSensorChanged(e: SensorEvent) {
+            override fun onSensorChanged(e: SensorEvent?) {
+                if (e == null || e.values.isEmpty()) return
                 sensorQueue.trySend(e.values[0].toLong())
             }
 
@@ -249,10 +270,11 @@ class StepCounterService : Service() {
      */
     private fun registerBarometer() {
         if (baroListener != null || !BaroFloors.hasBarometer(this)) return
-        val sm = getSystemService(SENSOR_SERVICE) as SensorManager
+        val sm = getSystemService(SENSOR_SERVICE) as? SensorManager ?: return
         val sensor = sm.getDefaultSensor(Sensor.TYPE_PRESSURE) ?: return
         val l = object : SensorEventListener {
-            override fun onSensorChanged(e: SensorEvent) {
+            override fun onSensorChanged(e: SensorEvent?) {
+                if (e == null || e.values.isEmpty()) return
                 val done = baroFloors.onPressure(e.values[0], System.currentTimeMillis())
                 if (done) scope.launch { runCatching { repo.addFloors(1) } }
             }
@@ -263,6 +285,78 @@ class StepCounterService : Service() {
         baroListener = l
     }
 
+    /**
+     * Workout route tracking inside the service (not the composable) so the
+     * route keeps recording with the screen off. Upgrades this service to
+     * health|location while ACTIVE, downgrades on stop. No location grant →
+     * no listener: the workout stays honestly step-only.
+     */
+    private fun startWorkoutTracking() {
+        if (workoutListener != null) return
+        scope.launch {
+            val fine = ContextCompat.checkSelfPermission(
+                this@StepCounterService, android.Manifest.permission.ACCESS_FINE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED
+            val coarse = ContextCompat.checkSelfPermission(
+                this@StepCounterService, android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!fine && !coarse) return@launch
+            // Location type BEFORE requesting: background fixes need it.
+            runCatching {
+                val day = repo.today().first()
+                val paused = repo.paused().first()
+                if (Build.VERSION.SDK_INT >= 29) {
+                    ServiceCompat.startForeground(
+                        this@StepCounterService, NOTIF_ID,
+                        buildSnapshot(day.steps, day.goal, paused),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH or
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+                    )
+                }
+            }
+            val lm = getSystemService(LOCATION_SERVICE) as? LocationManager ?: return@launch
+            val listener = LocationListener { loc ->
+                WorkoutGps.emit(
+                    GpsFix(
+                        loc.latitude, loc.longitude,
+                        if (loc.hasAccuracy()) loc.accuracy else 0f,
+                        System.currentTimeMillis(),
+                    ),
+                )
+            }
+            // 5s / 5m cadence matches the tracker's 5s filter window; GPS first,
+            // network as an indoor fallback (its fixes usually fail the 20m gate).
+            runCatching {
+                if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                    lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5_000L, 5f, listener)
+                }
+                if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                    lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5_000L, 5f, listener)
+                }
+            }.onSuccess {
+                workoutListener = listener
+                WorkoutGps.setActive(true)
+            }.onFailure {
+                runCatching { lm.removeUpdates(listener) }
+            }
+        }
+    }
+
+    private fun stopWorkoutTracking() {
+        WorkoutGps.setActive(false)
+        workoutListener?.let { l ->
+            runCatching { (getSystemService(LOCATION_SERVICE) as? LocationManager)?.removeUpdates(l) }
+        }
+        workoutListener = null
+        // Downgrade to health-only; the step count keeps flowing either way.
+        scope.launch {
+            runCatching {
+                val day = repo.today().first()
+                val paused = repo.paused().first()
+                startForegroundTyped(buildSnapshot(day.steps, day.goal, paused))
+            }
+        }
+    }
     /**
      * Vehicle/cycle veto via the Activity Recognition Transition API
      * (IN_VEHICLE + ON_BICYCLE, ENTER/EXIT).
@@ -341,7 +435,7 @@ class StepCounterService : Service() {
             ) == PackageManager.PERMISSION_GRANTED
 
     private fun createChannel() {
-        val nm = getSystemService(NotificationManager::class.java)
+        val nm = getSystemService(NotificationManager::class.java) ?: return
         if (nm.getNotificationChannel(CHANNEL_ID) == null) {
             nm.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "Step count", NotificationManager.IMPORTANCE_LOW),
@@ -379,6 +473,8 @@ class StepCounterService : Service() {
     companion object {
         const val ACTION_PAUSE = "com.tally.steps.action.PAUSE"
         const val ACTION_RESUME = "com.tally.steps.action.RESUME"
+        const val ACTION_WORKOUT_START = "com.tally.steps.action.WORKOUT_START"
+        const val ACTION_WORKOUT_STOP = "com.tally.steps.action.WORKOUT_STOP"
         private const val ACTION_VETO_TRANSITION = "com.tally.steps.action.VETO_TRANSITION"
         private const val VETO_PI_REQUEST = 2001
         const val CHANNEL_ID = "tally_steps"
@@ -386,6 +482,19 @@ class StepCounterService : Service() {
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(context, Intent(context, StepCounterService::class.java))
+        }
+
+        /** Route tracking for the active workout; survives screen-off. Step-only when location is denied. */
+        fun workoutStart(context: Context) {
+            val app = context.applicationContext
+            start(app)
+            app.startService(Intent(app, StepCounterService::class.java).setAction(ACTION_WORKOUT_START))
+        }
+
+        fun workoutStop(context: Context) {
+            context.applicationContext.startService(
+                Intent(context.applicationContext, StepCounterService::class.java).setAction(ACTION_WORKOUT_STOP),
+            )
         }
 
         fun stop(context: Context) {

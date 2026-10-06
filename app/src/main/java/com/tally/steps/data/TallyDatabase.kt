@@ -68,6 +68,9 @@ abstract class TallyDatabase : RoomDatabase() {
                     NAME,
                 )
                     .addMigrations(*MIGRATIONS)
+                    // Downgrade (e.g. sideloaded older APK): wipe + rebuild rather
+                    // than IllegalStateException crash. Upgrades still migrate cleanly.
+                    .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
                     .also { instance = it }
             }

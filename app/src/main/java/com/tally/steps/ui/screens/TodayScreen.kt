@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -48,11 +49,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.tally.steps.ui.components.GiantCount
 import com.tally.steps.ui.components.GoalRing
 import com.tally.steps.ui.components.StatRow
 import com.tally.steps.ui.theme.TallyElevation
@@ -113,8 +115,6 @@ fun TodayScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        GiantCount(steps = current.steps, goal = current.goal, paused = paused)
-
         GoalRing(steps = current.steps, goal = current.goal, paused = paused)
 
         if (current.steps == 0 && current.manualDelta == 0) {
@@ -207,12 +207,20 @@ fun TodayScreen(
             )
         }
 
+        var showCustomFix by rememberSaveable { mutableStateOf(false) }
         ManualEditRow(
             manualDelta = current.manualDelta,
             onPlus = { vm.nudgeManual(100) },
             onMinus = { vm.nudgeManual(-100) },
             onClear = { vm.clearManual() },
+            onCustom = { showCustomFix = true },
         )
+        if (showCustomFix) {
+            CustomFixDialog(
+                onConfirm = { vm.nudgeManual(it); showCustomFix = false },
+                onDismiss = { showCustomFix = false },
+            )
+        }
 
         OutlinedButton(
             onClick = { showTargetPicker = true },
@@ -272,6 +280,7 @@ private fun ManualEditRow(
     onPlus: () -> Unit,
     onMinus: () -> Unit,
     onClear: () -> Unit,
+    onCustom: () -> Unit,
 ) {
     val fmt = NumberFormat.getIntegerInstance()
     Card(
@@ -304,6 +313,12 @@ private fun ManualEditRow(
             ) {
                 Icon(Icons.Filled.Add, contentDescription = "Add 100 manual steps")
             }
+            TextButton(
+                onClick = onCustom,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text("Custom")
+            }
             if (manualDelta != 0) {
                 TextButton(
                     onClick = onClear,
@@ -335,6 +350,51 @@ private fun PauseResumeFab(paused: Boolean, onToggle: () -> Unit) {
     )
 }
 
+/** Custom manual fix: free amount, committed once on confirm — never mid-typing. */
+@Composable
+private fun CustomFixDialog(
+    onConfirm: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var raw by rememberSaveable { mutableStateOf("") }
+    // Signed digits only; blank = nothing to commit (button stays disabled).
+    val amount = raw.toIntOrNull()?.coerceIn(-10_000, 10_000)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Custom step fix") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Adds to today's manual fix (use − for too many). Sensor steps are never touched.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = raw,
+                    onValueChange = { v ->
+                        if (v.length <= 7 && (v.isEmpty() || v == "-" || v.toIntOrNull() != null)) raw = v
+                    },
+                    label = { Text("Steps (e.g. 450 or -200)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { amount?.let(onConfirm) },
+                enabled = amount != null && amount != 0,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text("Add fix") }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text("Cancel") }
+        },
+    )
+}
 /** Stepper dialog: − value + plus 5k / 8k / 10k presets. Real buttons, 48dp. */
 @Composable
 private fun TargetPicker(

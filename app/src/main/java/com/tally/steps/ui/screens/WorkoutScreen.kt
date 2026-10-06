@@ -28,6 +28,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -38,11 +40,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.tally.steps.data.Workout
 import com.tally.steps.ui.components.WorkoutMap
 import com.tally.steps.ui.workout.TargetKind
 import com.tally.steps.ui.workout.WorkoutConfig
@@ -69,6 +74,7 @@ private fun hasWorkoutLocation(context: Context): Boolean =
 fun WorkoutScreen(vm: WorkoutViewModel = viewModel()) {
     val ui by vm.ui.collectAsState()
     val points by vm.trackPoints.collectAsState()
+    val history by vm.workouts.collectAsState()
     val context = LocalContext.current
     var locGranted by remember { mutableStateOf(hasWorkoutLocation(context)) }
     val launcher = rememberLauncherForActivityResult(
@@ -132,10 +138,10 @@ fun WorkoutScreen(vm: WorkoutViewModel = viewModel()) {
                     Text("Start ${ui.config.type.label.lowercase()} workout")
                 }
                 OutlinedButton(
-                    onClick = { vm.quickStart(WorkoutType.WALK) },
+                    onClick = { vm.quickStart() },
                     modifier = Modifier.fillMaxWidth().then(MinTouch),
                 ) {
-                    Text("Start free walk now")
+                    Text("Start now (free target)")
                 }
                 Text(
                     text = "Counts steps with your phone's sensor. Distance is an estimate " +
@@ -143,15 +149,18 @@ fun WorkoutScreen(vm: WorkoutViewModel = viewModel()) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                WorkoutHistoryList(
+                    history = history,
+                    notice = ui.notice,
+                    onDismissNotice = vm::clearNotice,
+                    onDelete = vm::deleteWorkout,
+                    onExportGpx = vm::exportGpx,
+                )
             }
             WorkoutUiState.Phase.ACTIVE, WorkoutUiState.Phase.PAUSED -> {
                 ActiveCard(ui = ui, gpsPoints = points.size)
                 if (ui.config.gpsAvailable && ui.config.type.usesGps) {
-                    WorkoutMap(
-                        points = points,
-                        active = ui.phase == WorkoutUiState.Phase.ACTIVE,
-                        onLocation = { lat, lon, acc -> vm.onLocation(lat, lon, acc) },
-                    )
+                    WorkoutMap(points = points)
                 } else if (ui.config.type.usesGps) {
                     Text(
                         text = "Step-only: location denied. Grant it before your next " +
@@ -331,15 +340,26 @@ private fun ConfigCard(
 
 @Composable
 private fun NumberField(label: String, value: String, onValue: (Int?) -> Unit) {
-    var text by remember(value) { mutableStateOf(value) }
+    // Local draft keyed on the field, committed on Done only: typing "20000"
+    // never briefly sets the target to 2 mid-keystroke.
+    var text by remember(label) { mutableStateOf(value) }
     OutlinedTextField(
         value = text,
-        onValueChange = {
-            text = it
-            onValue(it.toIntOrNull()?.coerceIn(1, 1_000_000))
-        },
+        onValueChange = { text = it.filter { c -> c.isDigit() }.take(7) },
         label = { Text(label) },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Number,
+            imeAction = ImeAction.Done,
+        ),
+        keyboardActions = KeyboardActions(
+            onDone = { text.toIntOrNull()?.coerceIn(1, 1_000_000)?.let(onValue) },
+        ),
+        supportingText = {
+            Text(
+                text = "Saved target: $value · tap Done to apply",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        },
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
@@ -441,4 +461,70 @@ private fun formatDistance(m: Float): String =
 private fun formatTime(ms: Long): String {
     val s = ms / 1000
     return "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
+}
+
+/** Past sessions, newest first. Deleting never touches day totals (sensor truth). */
+@Composable
+private fun WorkoutHistoryList(
+    history: List<Workout>,
+    notice: String?,
+    onDismissNotice: () -> Unit,
+    onDelete: (Workout) -> Unit,
+    onExportGpx: (Workout) -> Unit,
+) {
+    if (history.isEmpty() && notice == null) return
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Past workouts", style = MaterialTheme.typography.titleMedium)
+            notice?.let {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onDismissNotice) { Text("OK") }
+                }
+            }
+            if (history.isEmpty()) {
+                Text(
+                    text = "Nothing yet — your finished workouts will appear here.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            history.take(20).forEach { w ->
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "${w.type.replaceFirstChar { c -> c.uppercase() }} · " +
+                            "${java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault()).format(java.util.Date(w.startMs))} · " +
+                            "${w.steps} steps · ${formatDistance(w.distanceM)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (w.gpsPolyline != null) {
+                            TextButton(onClick = { onExportGpx(w) }) { Text("GPX") }
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        TextButton(onClick = { onDelete(w) }) { Text("Delete") }
+                    }
+                }
+            }
+            if (history.size > 20) {
+                Text(
+                    text = "Showing the 20 most recent.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }

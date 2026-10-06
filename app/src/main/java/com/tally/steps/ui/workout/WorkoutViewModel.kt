@@ -6,8 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.tally.steps.data.PrefsStore
 import com.tally.steps.data.TallyDatabase
 import com.tally.steps.data.Workout
+import com.tally.steps.engine.StepCounterService
 import com.tally.steps.engine.StepRepository
 import com.tally.steps.engine.TrackPoint
+import com.tally.steps.engine.WorkoutGps
 import com.tally.steps.engine.WorkoutTracker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -106,6 +108,8 @@ data class WorkoutUiState(
     val lastSummary: WorkoutSummary? = null,
     /** Honest note about where the summary was saved. */
     val saveNote: String? = null,
+    /** Transient notice (export/delete confirmations). Cleared on next action. */
+    val notice: String? = null,
     /** Always true now: summaries persist to the Workout table. */
     val historySupported: Boolean = true,
 ) {
@@ -137,6 +141,7 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private var ticker: Job? = null
+    private var gpsJob: Job? = null
     private var baselineSteps = 0
     private var sessionStartMs = 0L
     private var activeSinceMs = 0L
@@ -173,9 +178,32 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun quickStart(type: WorkoutType) {
-        val keepGps = type.usesGps && _ui.value.config.gpsAvailable
-        setConfig(WorkoutConfig(type = type, targetKind = TargetKind.FREE, gpsAvailable = keepGps))
+    /** Service pipe: fixes flow even with the screen off (location-type FGS). */
+    private fun startGpsPipe() {
+        gpsJob?.cancel()
+        val s = _ui.value
+        if (!s.config.gpsAvailable || !s.config.type.usesGps) return
+        StepCounterService.workoutStart(getApplication())
+        gpsJob = viewModelScope.launch {
+            WorkoutGps.fixes.collect { fix ->
+                onLocation(fix.lat, fix.lon, fix.accuracyM)
+            }
+        }
+    }
+
+    private fun stopGpsPipe() {
+        gpsJob?.cancel()
+        gpsJob = null
+        runCatching { StepCounterService.workoutStop(getApplication()) }
+    }
+
+    /**
+     * One-tap start that keeps the chosen activity and GPS state and only
+     * clears the target to Free — never silently switches Walk vs Ride.
+     */
+    fun quickStart() {
+        val cur = _ui.value.config
+        setConfig(cur.copy(targetKind = TargetKind.FREE))
         start()
     }
 
@@ -190,6 +218,9 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
             sessionStartMs = now
             activeSinceMs = now
             tracker.start(now)
+            // RIDE pedals: stand the drive/cycle vetoes down while ACTIVE.
+            runCatching { repo.setRideActive(_ui.value.config.type == WorkoutType.RIDE) }
+            startGpsPipe()
             _ui.value = _ui.value.copy(
                 phase = WorkoutUiState.Phase.ACTIVE,
                 sessionSteps = 0,
@@ -256,6 +287,8 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
                 targetHit = s.targetHit,
             )
             val note = persistSummary(summary, tracker.polylineString())
+            runCatching { repo.setRideActive(false) }
+            stopGpsPipe()
             _ui.value = s.copy(phase = WorkoutUiState.Phase.DONE, lastSummary = summary, saveNote = note)
         }
     }
@@ -263,7 +296,51 @@ class WorkoutViewModel(app: Application) : AndroidViewModel(app) {
     fun reset() {
         ticker?.cancel()
         tracker.clear()
+        stopGpsPipe()
+        viewModelScope.launch { runCatching { repo.setRideActive(false) } }
         _ui.value = WorkoutUiState(config = _ui.value.config)
+    }
+
+    override fun onCleared() {
+        // Screen gone mid-session: stop the route pipe (steps survive in Room).
+        stopGpsPipe()
+        super.onCleared()
+    }
+
+    fun clearNotice() {
+        if (_ui.value.notice != null) _ui.value = _ui.value.copy(notice = null)
+    }
+
+    /** Permanent delete of one workout. Day totals are untouched (sensor truth). */
+    fun deleteWorkout(w: Workout) {
+        viewModelScope.launch {
+            runCatching { workoutDao.delete(w) }
+                .onSuccess { _ui.value = _ui.value.copy(notice = "Workout deleted.") }
+                .onFailure { _ui.value = _ui.value.copy(notice = "Could not delete that workout.") }
+        }
+    }
+
+    /** GPX 1.1 export of one workout's route into the Tally folder. Step-only workouts have no route. */
+    fun exportGpx(w: Workout) {
+        viewModelScope.launch {
+            val gpx = WorkoutTracker.storedToGpx(w.type, w.startMs, w.gpsPolyline)
+            if (gpx == null) {
+                _ui.value = _ui.value.copy(notice = "Step-only workout — no route to export.")
+                return@launch
+            }
+            runCatching {
+                val dir = java.io.File(
+                    getApplication<Application>().getExternalFilesDir(null), "Tally",
+                ).apply { mkdirs() }
+                val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                    .format(java.util.Date(w.startMs))
+                java.io.File(dir, "tally-${w.type}-$stamp.gpx").apply { writeText(gpx) }
+            }.onSuccess {
+                _ui.value = _ui.value.copy(notice = "Route saved to ${it.name} in the Tally folder.")
+            }.onFailure {
+                _ui.value = _ui.value.copy(notice = "Export failed — nothing was written.")
+            }
+        }
     }
 
     // ---- internals ----

@@ -24,12 +24,9 @@ import androidx.compose.ui.unit.dp
 import com.tally.steps.data.Day
 import com.tally.steps.ui.theme.tabulated
 import java.text.NumberFormat
-import java.time.Instant
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 enum class HistoryRange(val days: Int, val label: String) {
-    DAY(1, "Day"),
     WEEK(7, "Week"),
     MONTH(30, "Month"),
 }
@@ -68,6 +65,8 @@ fun RangeSwitch(
 @Composable
 fun BarChart(
     days: List<Day>,
+    selectedEpoch: Long? = null,
+    onSelect: ((Long) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val fmt = NumberFormat.getIntegerInstance()
@@ -132,30 +131,51 @@ fun BarChart(
                 )
             }
         }
-        BarChartFallbackList(days = days)
+        BarChartFallbackList(days = days, selectedEpoch = selectedEpoch, onSelect = onSelect)
     }
 }
 
-/** Screen-reader (and honest-data) fallback: every bar as plain text. */
+/** Screen-reader (and honest-data) fallback: every bar as plain text. Tapping a row selects that day below. */
 @Composable
 fun BarChartFallbackList(
     days: List<Day>,
+    selectedEpoch: Long? = null,
+    onSelect: ((Long) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val fmt = NumberFormat.getIntegerInstance()
     val dateFmt = DateTimeFormatter.ofPattern("MMM d")
-    val zone = ZoneId.systemDefault()
     val today = java.time.LocalDate.now().toEpochDay()
     Column(modifier = modifier.padding(top = 8.dp)) {
         days.forEach { day ->
-            val date = Instant.ofEpochMilli(day.epochDay * 86_400_000L)
-                .atZone(zone).toLocalDate().format(dateFmt)
-            Text(
-                text = "$date: ${fmt.format(day.steps)} steps of ${fmt.format(day.goal)} goal" +
-                    if (day.epochDay == today) " · today" else "",
-                style = MaterialTheme.typography.bodySmall.tabulated(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            val date = runCatching { java.time.LocalDate.ofEpochDay(day.epochDay).format(dateFmt) }
+                .getOrDefault("")
+            val label = "$date: ${fmt.format(day.steps)} steps of ${fmt.format(day.goal)} goal" +
+                if (day.epochDay == today) " · today" else ""
+            if (onSelect != null) {
+                androidx.compose.material3.TextButton(
+                    onClick = { onSelect(day.epochDay) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) {
+                    Text(
+                        text = (if (day.epochDay == selectedEpoch) "▸ " else "") + label,
+                        style = MaterialTheme.typography.bodySmall.tabulated(),
+                        color = if (day.epochDay == selectedEpoch) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            } else {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall.tabulated(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

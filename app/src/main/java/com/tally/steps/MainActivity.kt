@@ -1,10 +1,14 @@
 package com.tally.steps
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.EmojiEvents
@@ -19,10 +23,13 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -37,6 +44,8 @@ import com.tally.steps.ui.screens.SettingsScreen
 import com.tally.steps.ui.screens.TodayScreen
 import com.tally.steps.ui.screens.WorkoutScreen
 import com.tally.steps.ui.theme.TallyTheme
+import com.tally.steps.engine.StepCounterService
+import com.tally.steps.engine.SyncWorker
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
 
@@ -74,6 +83,20 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun TallyNav() {
+    // Fresh install / grant path: BootReceiver only runs after a reboot, so
+    // start counting + schedule the hourly safety net here once onboarding
+    // is done and Activity Recognition is granted. Idempotent.
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        val arGranted = Build.VERSION.SDK_INT < 29 ||
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.ACTIVITY_RECOGNITION,
+            ) == PackageManager.PERMISSION_GRANTED
+        if (arGranted) {
+            runCatching { StepCounterService.start(context.applicationContext) }
+            runCatching { SyncWorker.schedule(context.applicationContext) }
+        }
+    }
     val navController = rememberNavController()
     Scaffold(
         bottomBar = {

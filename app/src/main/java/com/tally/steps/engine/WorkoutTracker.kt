@@ -148,7 +148,6 @@ class WorkoutTracker {
         pausedMsTotal = 0L
         _pointsFlow.value = emptyList()
     }
-
     companion object {
         const val MAX_ACCURACY_M = 20f
         const val MAX_WALK_SPEED_MS = 3.5f
@@ -163,6 +162,24 @@ class WorkoutTracker {
                 val lat = parts.getOrNull(0)?.toDoubleOrNull()
                 val lon = parts.getOrNull(1)?.toDoubleOrNull()
                 if (lat != null && lon != null) TrackPoint(lat, lon, 0L, 0f) else null
+            }
+        }
+
+        /**
+         * GPX 1.1 for a persisted workout. Stored points carry no timestamps
+         * (only live sessions do), so trkpts omit <time> — valid GPX, honest
+         * about what we kept. Null when the workout was step-only.
+         */
+        fun storedToGpx(type: String, startMs: Long, polyline: String?): String? {
+            val pts = decodePolyline(polyline)
+            if (pts.size < 2) return null
+            return buildString {
+                append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+                append("<gpx version=\"1.1\" creator=\"Tally\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n")
+                append("<metadata><time>${Instant.ofEpochMilli(startMs)}</time></metadata>\n")
+                append("<trk><name>Tally $type</name><trkseg>\n")
+                for (p in pts) append("<trkpt lat=\"${p.lat}\" lon=\"${p.lon}\"/>\n")
+                append("</trkseg></trk>\n</gpx>")
             }
         }
 

@@ -5,6 +5,8 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tally.steps.data.Day
+import com.tally.steps.data.TallyDatabase
+import com.tally.steps.data.Workout
 import com.tally.steps.export.BackupExport
 import com.tally.steps.export.BackupExport.RestoreOutcome
 import com.tally.steps.ui.workout.EngineBridge
@@ -27,6 +29,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val appRef = app
     private val repo = EngineBridge.stepRepository(app)
     private val prefs = EngineBridge.prefsStore(app)
+    private val workoutDao = TallyDatabase.getInstance(app).workoutDao()
 
     private fun <T> prefFlow(flow: Flow<T>, default: T): StateFlow<T> =
         flow.stateIn(viewModelScope, SharingStarted.Eagerly, default)
@@ -76,6 +79,9 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setHcMode(v: String) = launchPrefs("Health Connect") { prefs.setHcMode(v) }
     fun setBatteryAsked() = launchPrefs("battery choice") { prefs.setBatteryAsked(true) }
 
+    /** Re-show the intro pages (permissions, battery, how counting works). */
+    fun replayIntro() = launchPrefs("intro choice") { prefs.setOnboardingDone(false) }
+
     fun setPaused(v: Boolean) {
         viewModelScope.launch {
             runCatching { repo.setPaused(v) }
@@ -102,6 +108,9 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun allDays(): List<Day> =
         runCatching { repo.history(365).first() }.getOrDefault(emptyList())
+
+    private suspend fun allWorkouts(): List<Workout> =
+        runCatching { workoutDao.workoutsFlow().first() }.getOrDefault(emptyList())
 
     private suspend fun prefsSnapshot(): Map<String, String> = mapOf(
         "goal" to goal.first().toString(),
@@ -133,7 +142,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         guardBusy()
         viewModelScope.launch {
             try {
-                val file: File = BackupExport.backup(appRef, allDays(), prefsSnapshot())
+                val file: File = BackupExport.backup(appRef, allDays(), prefsSnapshot(), allWorkouts())
                 _message.value = "Backup saved to ${file.name} in the Tally folder. " +
                     "Keep a copy somewhere safe — restoring replaces this phone's data."
             } catch (e: Exception) {
@@ -181,11 +190,26 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                         source = it.source,
                         updatedAt = it.updatedAt,
                         restDay = it.restDay,
+                        floors = it.floors,
                     )
                 },
             )
+            outcome.workouts.forEach {
+                workoutDao.insert(
+                    Workout(
+                        id = it.id,
+                        type = it.type,
+                        startMs = it.startMs,
+                        endMs = it.endMs,
+                        steps = it.steps,
+                        distanceM = it.distanceM,
+                        pausedMs = it.pausedMs,
+                        gpsPolyline = it.gpsPolyline,
+                    ),
+                )
+            }
         }.onFailure {
-            _message.value = "Backup checked but days could not be written (${it.message}). Nothing was changed."
+            _message.value = "Backup checked but data could not be written (${it.message}). Nothing was changed."
             return
         }
         val p = outcome.prefs
@@ -199,8 +223,9 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             p["treadmill"]?.toBooleanStrictOrNull()?.let { prefs.setTreadmill(it) }
             // hcMode deliberately NOT restored: stays OFF until the user turns it on.
         }
-        _message.value = "Restored ${outcome.days.size} day(s). Goal unchanged. " +
-            "(Health Connect stays off)."
+        _message.value = "Restored ${outcome.days.size} day(s)" +
+            (if (outcome.workouts.isNotEmpty()) " + ${outcome.workouts.size} workout(s)" else "") +
+            ". Goal unchanged. (Health Connect stays off)."
     }
 
     private fun guardBusy() {

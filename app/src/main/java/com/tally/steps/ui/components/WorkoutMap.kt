@@ -4,7 +4,6 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
-import android.location.LocationListener
 import android.location.LocationManager
 import android.view.MotionEvent
 import androidx.compose.foundation.background
@@ -44,11 +43,14 @@ import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Polyline
+import org.osmdroid.views.overlay.ScaleBarOverlay
 
 /**
  * S04 live route map (osmdroid, Apache-2.0 — OpenTracks pattern).
- * Default tile cache on; follow mode centers the FIRST fix only, then
- * yields to the user until the Recenter button is tapped.
+ * Display-only: fixes arrive from [com.tally.steps.engine.WorkoutGps], fed by
+ * the step service inside a location-type foreground session, so the route
+ * keeps recording with the screen off. Default tile cache on; follow mode
+ * centers the FIRST fix only, then yields to the user until Recenter.
  *
  * Honest offline note: map tiles need internet, tracking does not — the
  * polyline and step count keep recording with zero connectivity. Without
@@ -58,8 +60,6 @@ import org.osmdroid.views.overlay.Polyline
 @Suppress("DEPRECATION") // setMapListener is the touch-gated follow switch on 6.1.20
 fun WorkoutMap(
     points: List<TrackPoint>,
-    active: Boolean,
-    onLocation: (lat: Double, lon: Double, accuracyM: Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current.applicationContext
@@ -88,22 +88,6 @@ fun WorkoutMap(
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
 
-    // Feed raw fixes up to the ViewModel's WorkoutTracker, which applies the
-    // arch §5 filter (accuracy > 20m / speed > 3.5 m/s dropped).
-    DisposableEffect(active, hasLoc) {
-        if (!active || !hasLoc) return@DisposableEffect onDispose {}
-        val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        val listener = LocationListener { loc ->
-            onLocation(loc.latitude, loc.longitude, if (loc.hasAccuracy()) loc.accuracy else 0f)
-        }
-        runCatching {
-            requestFixes(lm, listener)
-        }
-        onDispose {
-            runCatching { lm.removeUpdates(listener) }
-        }
-    }
-
     // New workout clears points: let the next first fix center again.
     LaunchedEffect(points.isEmpty()) {
         if (points.isEmpty()) firstFixCentered = false
@@ -121,10 +105,14 @@ fun WorkoutMap(
         ) {
             AndroidView(
                 factory = { ctx ->
-                    Configuration.getInstance().userAgentValue = ctx.packageName
+                    // OSM tile policy: identify the app with contact, not a bare package name.
+                    Configuration.getInstance().userAgentValue =
+                        "${ctx.packageName};https://github.com/omersusin/tally"
                     MapView(ctx).apply {
                         setTileSource(TileSourceFactory.MAPNIK)
                         setMultiTouchControls(true)
+                        // Free scale bar; tiles already cache on disk (offline story).
+                        overlays.add(ScaleBarOverlay(this))
                         // Launch on last-known fix; world view when there is none —
                         // never the (0,0) ocean at street zoom.
                         val known = lastKnownPoint(ctx.applicationContext)
@@ -203,6 +191,11 @@ fun WorkoutMap(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Text(
+            text = "Map © OpenStreetMap contributors (ODbL).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Button(
             onClick = {
                 follow = true
@@ -246,7 +239,8 @@ private fun hasLocation(context: Context): Boolean =
 private fun lastKnownPoint(appContext: Context): GeoPoint? {
     if (!hasLocation(appContext)) return null
     return runCatching {
-        val lm = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val lm = appContext.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            ?: return null
         val gps = runCatching {
             if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
                 lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
@@ -266,16 +260,4 @@ private fun lastKnownPoint(appContext: Context): GeoPoint? {
         if (fix.latitude == 0.0 && fix.longitude == 0.0) return null
         GeoPoint(fix.latitude, fix.longitude)
     }.getOrNull()
-}
-
-@SuppressLint("MissingPermission")
-private fun requestFixes(lm: LocationManager, listener: LocationListener) {
-    // 5s / 5m cadence matches the tracker's 5s filter window; GPS first,
-    // network as an indoor fallback (its fixes usually fail the 20m gate).
-    if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-        lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5_000L, 5f, listener)
-    }
-    if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-        lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5_000L, 5f, listener)
-    }
 }

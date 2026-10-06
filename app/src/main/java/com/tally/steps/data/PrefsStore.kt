@@ -8,7 +8,9 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 
 private val Context.tallyPrefs by preferencesDataStore("tally_prefs")
 
@@ -37,38 +39,43 @@ class PrefsStore(private val context: Context) {
         val vetoDay = longPreferencesKey("veto_day")
     }
 
-    val goal: Flow<Int> = context.tallyPrefs.data.map { it[K.goal] ?: 8000 }
-    val heightCm: Flow<Int> = context.tallyPrefs.data.map { it[K.heightCm] ?: 170 }
-    val weightKg: Flow<Int> = context.tallyPrefs.data.map { it[K.weightKg] ?: 70 }
-    val stepLenCm: Flow<Int> = context.tallyPrefs.data.map { it[K.stepLenCm] ?: 70 }
-    val units: Flow<String> = context.tallyPrefs.data.map { it[K.units] ?: "metric" }
-    val theme: Flow<String> = context.tallyPrefs.data.map { it[K.theme] ?: "system" }
-    val sensitivity: Flow<String> = context.tallyPrefs.data.map { it[K.sensitivity] ?: "M" }
-    val treadmill: Flow<Boolean> = context.tallyPrefs.data.map { it[K.treadmill] ?: false }
+    // Every flow survives a corrupt prefs file: IOException -> default, never a crash.
+    private fun <T> safeFlow(key: androidx.datastore.preferences.core.Preferences.Key<T>, default: T): Flow<T> =
+        context.tallyPrefs.data.catch { e -> if (e is IOException) emit(androidx.datastore.preferences.core.emptyPreferences()) else throw e }
+            .map { it[key] ?: default }
+
+    val goal: Flow<Int> = safeFlow(K.goal, 8000)
+    val heightCm: Flow<Int> = safeFlow(K.heightCm, 170)
+    val weightKg: Flow<Int> = safeFlow(K.weightKg, 70)
+    val stepLenCm: Flow<Int> = safeFlow(K.stepLenCm, 70)
+    val units: Flow<String> = safeFlow(K.units, "metric")
+    val theme: Flow<String> = safeFlow(K.theme, "system")
+    val sensitivity: Flow<String> = safeFlow(K.sensitivity, "M")
+    val treadmill: Flow<Boolean> = safeFlow(K.treadmill, false)
     /** OFF | R | RW */
-    val hcMode: Flow<String> = context.tallyPrefs.data.map { it[K.hcMode] ?: "OFF" }
-    val hcAuto: Flow<Boolean> = context.tallyPrefs.data.map { it[K.hcAuto] ?: false }
-    val batteryAsked: Flow<Boolean> = context.tallyPrefs.data.map { it[K.batteryAsked] ?: false }
-    val onboardingDone: Flow<Boolean> = context.tallyPrefs.data.map { it[K.onboardingDone] ?: false }
+    val hcMode: Flow<String> = safeFlow(K.hcMode, "OFF")
+    val hcAuto: Flow<Boolean> = safeFlow(K.hcAuto, false)
+    val batteryAsked: Flow<Boolean> = safeFlow(K.batteryAsked, false)
+    val onboardingDone: Flow<Boolean> = safeFlow(K.onboardingDone, false)
     /** Last raw TYPE_STEP_COUNTER value; -1 = unset, force rebaseline. */
-    val baseline: Flow<Long> = context.tallyPrefs.data.map { it[K.baseline] ?: -1L }
-    val bootId: Flow<Long> = context.tallyPrefs.data.map { it[K.bootId] ?: -1L }
-    val paused: Flow<Boolean> = context.tallyPrefs.data.map { it[K.paused] ?: false }
+    val baseline: Flow<Long> = safeFlow(K.baseline, -1L)
+    val bootId: Flow<Long> = safeFlow(K.bootId, -1L)
+    val paused: Flow<Boolean> = safeFlow(K.paused, false)
     /** Last accepted sensor-event time; persisted so post-restart gap-fill doesn't always trigger. */
-    val lastSensorAtMs: Flow<Long> = context.tallyPrefs.data.map { it[K.lastSensorAtMs] ?: 0L }
+    val lastSensorAtMs: Flow<Long> = safeFlow(K.lastSensorAtMs, 0L)
     /** "yyyy-MM-dd" of the last goal-nudge card shown; empty = never. Guards once-per-day. */
-    val lastNudgeDay: Flow<String> = context.tallyPrefs.data.map { it[K.lastNudgeDay] ?: "" }
+    val lastNudgeDay: Flow<String> = safeFlow(K.lastNudgeDay, "")
     /**
      * Steps swallowed by the vehicle/cycle veto today (honest UI note:
      * "N steps ignored while driving/cycling"). Reset on day rollover by
      * StepRepository.ensureToday via [vetoDay]. Step counts live in Room;
      * this counter is a UI-facing note only, never added back to steps.
      */
-    val vetoIgnoredToday: Flow<Int> = context.tallyPrefs.data.map { it[K.vetoIgnoredToday] ?: 0 }
+    val vetoIgnoredToday: Flow<Int> = safeFlow(K.vetoIgnoredToday, 0)
     /** Epoch day the veto counter belongs to; mismatch with today = stale, reset. */
-    val vetoDay: Flow<Long> = context.tallyPrefs.data.map { it[K.vetoDay] ?: -1L }
+    val vetoDay: Flow<Long> = safeFlow(K.vetoDay, -1L)
 
-    suspend fun setGoal(v: Int) = context.tallyPrefs.edit { it[K.goal] = v.coerceIn(1_000, 100_000) }
+    suspend fun setGoal(v: Int) = context.tallyPrefs.edit { it[K.goal] = v.coerceIn(1_000, 50_000) }
     suspend fun setHeightCm(v: Int) = context.tallyPrefs.edit { it[K.heightCm] = v.coerceIn(100, 230) }
     suspend fun setWeightKg(v: Int) = context.tallyPrefs.edit { it[K.weightKg] = v.coerceIn(30, 250) }
     suspend fun setStepLenCm(v: Int) = context.tallyPrefs.edit { it[K.stepLenCm] = v.coerceIn(30, 150) }

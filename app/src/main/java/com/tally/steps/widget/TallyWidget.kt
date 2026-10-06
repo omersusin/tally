@@ -58,7 +58,7 @@ class TallyWidget : GlanceAppWidget() {
     @Composable
     private fun Content() {
         val steps = currentState(CountKey) ?: -1
-        val goal = currentState(GoalKey) ?: 6000
+        val goal = currentState(GoalKey) ?: 8000
         val openApp = actionStartActivity(
             ComponentName(LocalContext.current, MainActivity::class.java),
         )
@@ -77,13 +77,18 @@ class TallyWidget : GlanceAppWidget() {
                 text = if (steps < 0) {
                     "Tap to open Tally"
                 } else {
-                    "of $goal steps today"
+                    val pct = if (goal > 0) ((steps * 100L) / goal).toInt().coerceIn(0, 100) else 0
+                    val filled = pct * 10 / 100
+                    "${"█".repeat(filled)}${"░".repeat(10 - filled)} $pct% of $goal"
                 },
             )
         }
     }
 
     companion object {
+        // Shared scope: requestUpdate fires on every distinct step change —
+        // a fresh scope per tap would flood under fast sensor bursts.
+        private val widgetScope = CoroutineScope(Dispatchers.IO)
         /**
          * Worker hook: call after each flush/rollover/sync and on boot.
          * Reads today's Day from the engine and pushes it to every widget
@@ -118,7 +123,7 @@ class TallyWidget : GlanceAppWidget() {
 
         /** Fire-and-forget variant for non-suspend call sites (e.g. BootReceiver). */
         fun requestUpdate(context: Context) {
-            CoroutineScope(Dispatchers.IO).launch {
+            widgetScope.launch {
                 update(context.applicationContext)
             }
         }

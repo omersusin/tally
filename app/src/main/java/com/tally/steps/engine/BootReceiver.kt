@@ -12,7 +12,14 @@ import kotlinx.coroutines.launch
 /** Post-boot: invalidate baseline (forces rebaseline, never phantom steps), restart FGS, reschedule hourly sync. */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        // LOCKED_BOOT covers file-encrypted phones (counts resume after unlock);
+        // QUICKBOOT covers Xiaomi/BBK fast-boot broadcasts.
+        when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_LOCKED_BOOT_COMPLETED,
+            "android.intent.action.QUICKBOOT_POWERON" -> Unit
+            else -> return
+        }
         val pending = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
             try {
