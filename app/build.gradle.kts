@@ -60,22 +60,24 @@ android {
 }
 
 dependencies {
-    // Core + lifecycle
-    implementation("androidx.core:core-ktx:1.19.1")
+    // Core + lifecycle (newest versions whose AARs still target SDK <= 36;
+    // the Oct-2026 train already requires the unreleased SDK 37)
+    implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.activity:activity-compose:1.13.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
 
-    // Compose BOM + Material 3 Expressive stable 1.4 (versions managed by BOM)
-    implementation(platform("androidx.compose:compose-bom:2026.09.00"))
+    // Compose BOM 2026.03.01 = Material 3 Expressive 1.4.0 STABLE on the
+    // compose 1.10 train (AARs target SDK 35). Newer BOMs need SDK 37.
+    implementation(platform("androidx.compose:compose-bom:2026.03.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.ui:ui-tooling-preview")
 
-    // Navigation
-    implementation("androidx.navigation:navigation-compose:2.10.2")
+    // Navigation (2.9.8 targets SDK 35; 2.10.x needs the unreleased 37)
+    implementation("androidx.navigation:navigation-compose:2.9.8")
 
     // Room
     implementation("androidx.room:room-runtime:2.8.5")
