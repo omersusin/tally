@@ -10,9 +10,6 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.LocalContext
-import androidx.glance.action.ActionCallback
-import androidx.glance.action.ActionParameters
-import androidx.glance.action.actionRunCallback
 import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
@@ -37,25 +34,6 @@ import kotlinx.coroutines.launch
 private val CountKey = intPreferencesKey("today_steps")
 private val GoalKey = intPreferencesKey("today_goal")
 private val PausedKey = booleanPreferencesKey("today_paused")
-
-/**
- * Widget pause/resume: flips the engine pref directly (the service observes
- * it and updates its notification). Steps survive either way.
- */
-class TogglePauseAction : ActionCallback {
-    override suspend fun onAction(
-        context: Context,
-        glanceId: GlanceId,
-        parameters: ActionParameters,
-    ) {
-        val app = context.applicationContext as? Application ?: return
-        val repo = EngineBridge.stepRepository(app)
-        runCatching {
-            val paused = repo.paused().first()
-            repo.setPaused(!paused)
-        }
-    }
-}
 
 /**
  * S07 home-screen widget: today's count + goal. Tapping anywhere opens the app.
@@ -112,7 +90,14 @@ class TallyWidget : GlanceAppWidget() {
                     text = if (paused) "Paused — tap to resume" else "Counting — tap to pause",
                     modifier = GlanceModifier
                         .padding(top = 4.dp)
-                        .clickable(actionRunCallback<TogglePauseAction>()),
+                        .clickable(
+                            actionStartActivity(
+                                ComponentName(
+                                    LocalContext.current,
+                                    TogglePauseActivity::class.java,
+                                ),
+                            ),
+                        ),
                 )
             }
         }
