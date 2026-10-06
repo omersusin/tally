@@ -32,7 +32,7 @@ enum class HistoryRange(val days: Int, val label: String) {
 }
 
 /**
- * Day / Week / Month segmented control. Real buttons, 48dp tall,
+ * Week / Month segmented control. Real buttons, 48dp tall,
  * full-width pill. Arrow-key navigation comes free from the
  * segmented-button group semantics.
  */
@@ -76,6 +76,7 @@ fun BarChart(
     val scale = maxOf(maxSteps, goalRef).coerceAtLeast(1)
     val accent = MaterialTheme.colorScheme.primary
     val muted = MaterialTheme.colorScheme.surfaceVariant
+    val outlineColor = MaterialTheme.colorScheme.outline
     val highlight = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
     val today = java.time.LocalDate.now().toEpochDay()
 
@@ -118,11 +119,11 @@ fun BarChart(
                     cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx()),
                 )
             }
-            // Goal line: dashed accent across the full width.
+            // Goal line: dashed, in outline — never the today-bar accent.
             if (goalRef > 0) {
                 val y = size.height - plotH * (goalRef.toFloat() / scale)
                 drawLine(
-                    color = accent,
+                    color = outlineColor,
                     start = Offset(0f, y),
                     end = Offset(size.width, y),
                     strokeWidth = 2.dp.toPx(),
@@ -160,7 +161,7 @@ fun BarChartFallbackList(
                         .heightIn(min = 48.dp),
                 ) {
                     Text(
-                        text = (if (day.epochDay == selectedEpoch) "▸ " else "") + label,
+                        text = (if (day.epochDay == selectedEpoch) "Selected, " else "") + label,
                         style = MaterialTheme.typography.bodySmall.tabulated(),
                         color = if (day.epochDay == selectedEpoch) {
                             MaterialTheme.colorScheme.primary

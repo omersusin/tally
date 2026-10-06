@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
@@ -28,7 +29,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -40,6 +40,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
@@ -85,6 +87,8 @@ fun WorkoutScreen(vm: WorkoutViewModel = viewModel()) {
             hasWorkoutLocation(context)
         locGranted = granted
         vm.setGpsAvailable(granted)
+        // Mid-session grant: join the service pipe from here (no-op unless ACTIVE).
+        if (granted) vm.retryGps()
     }
 
     fun setType(type: WorkoutType) {
@@ -158,17 +162,9 @@ fun WorkoutScreen(vm: WorkoutViewModel = viewModel()) {
                 )
             }
             WorkoutUiState.Phase.ACTIVE, WorkoutUiState.Phase.PAUSED -> {
+                var showDiscard by remember { mutableStateOf(false) }
                 ActiveCard(ui = ui, gpsPoints = points.size)
-                if (ui.config.gpsAvailable && ui.config.type.usesGps) {
-                    WorkoutMap(points = points)
-                } else if (ui.config.type.usesGps) {
-                    Text(
-                        text = "Step-only: location denied. Grant it before your next " +
-                            "workout to record a route.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                // Actions BEFORE the map: reachable without scrolling past it mid-stride.
                 if (ui.phase == WorkoutUiState.Phase.ACTIVE) {
                     Button(
                         onClick = { vm.pause() },
@@ -177,7 +173,7 @@ fun WorkoutScreen(vm: WorkoutViewModel = viewModel()) {
                 } else {
                     if (ui.autoPaused) {
                         Text(
-                            text = "Auto-paused: no steps for a while. " +
+                            text = "Auto-break: no steps for a minute. " +
                                 "Resume when you keep moving.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -188,10 +184,93 @@ fun WorkoutScreen(vm: WorkoutViewModel = viewModel()) {
                         modifier = Modifier.fillMaxWidth().then(MinTouch),
                     ) { Text("Resume") }
                 }
-                OutlinedButton(
-                    onClick = { vm.finish() },
-                    modifier = Modifier.fillMaxWidth().then(MinTouch),
-                ) { Text("Finish") }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { vm.finish() },
+                        modifier = Modifier.weight(1f).then(MinTouch),
+                    ) { Text(if (ui.targetHit) "Finish — target hit" else "Finish") }
+                    OutlinedButton(
+                        onClick = { showDiscard = true },
+                        modifier = Modifier.weight(1f).then(MinTouch),
+                    ) { Text("Discard") }
+                }
+                if (showDiscard) {
+                    AlertDialog(
+                        onDismissRequest = { showDiscard = false },
+                        title = { Text("Discard this workout?") },
+                        text = {
+                            Text(
+                                if (ui.sessionSteps == 0) {
+                                    "No steps recorded yet. Discarding deletes " +
+                                        "the session; today's count is untouched."
+                                } else {
+                                    "This deletes the session (including its route). " +
+                                        "The ${ui.sessionSteps} steps stay in today's count."
+                                },
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = { showDiscard = false; vm.discard() },
+                                modifier = Modifier.then(MinTouch),
+                            ) { Text("Discard session") }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { showDiscard = false },
+                                modifier = Modifier.then(MinTouch),
+                            ) { Text("Keep going") }
+                        },
+                    )
+                }
+                if (ui.targetHit && ui.phase == WorkoutUiState.Phase.ACTIVE) {
+                    Text(
+                        text = "Target hit — nice. The timer keeps running until you finish.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (ui.config.gpsAvailable && ui.config.type.usesGps) {
+                    WorkoutMap(points = points)
+                } else if (ui.config.type.usesGps) {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = "Step-only: no route is recording.",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                text = "Grant location to draw the route from here — " +
+                                    "steps so far are kept.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(
+                                onClick = {
+                                    if (hasWorkoutLocation(context)) {
+                                        locGranted = true
+                                        vm.setGpsAvailable(true)
+                                        vm.retryGps()
+                                    } else {
+                                        launcher.launch(
+                                            arrayOf(
+                                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                                Manifest.permission.ACCESS_COARSE_LOCATION,
+                                            ),
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().then(MinTouch),
+                            ) { Text("Enable route tracking") }
+                        }
+                    }
+                }
             }
         }
     }
@@ -324,7 +403,7 @@ private fun ConfigCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Auto-break")
                     Text(
-                        "Auto-pause after 60 s without steps.",
+                        "Pauses the timer after 60 s without steps.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -369,11 +448,15 @@ private fun NumberField(label: String, value: String, onValue: (Int?) -> Unit) {
 private fun ActiveCard(ui: WorkoutUiState, gpsPoints: Int) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier
+                .padding(16.dp)
+                .semantics(mergeDescendants = true) {
+                    contentDescription = workoutStatusDescription(ui, gpsPoints)
+                },
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = if (ui.phase == WorkoutUiState.Phase.PAUSED) "Paused" else "Recording…",
+                text = if (ui.phase == WorkoutUiState.Phase.PAUSED) "Paused" else "Recording ${ui.config.type.label.lowercase()}",
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
@@ -381,16 +464,18 @@ private fun ActiveCard(ui: WorkoutUiState, gpsPoints: Int) {
                 style = MaterialTheme.typography.displaySmall,
             )
             Text(
-                text = "About ${formatDistance(ui.distanceM)} · ${formatTime(ui.elapsedMs)}" +
-                    if (ui.pausedMs > 0) " (paused ${formatTime(ui.pausedMs)})" else "",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = "About ${formatDistance(ui.distanceM)} · ${formatTime(ui.elapsedMs)} moving" +
+                    if (ui.pausedMs > 0) " · ${formatTime(ui.pausedMs)} paused" else "",
+                style = MaterialTheme.typography.bodyLarge,
             )
             if (ui.config.gpsAvailable && ui.config.type.usesGps) {
                 Text(
-                    text = if (gpsPoints > 0) "$gpsPoints GPS points on the route."
-                    else "Waiting for GPS lock… steps still count.",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = if (gpsPoints > 0) {
+                        if (gpsPoints == 1) "1 GPS point on the route." else "$gpsPoints GPS points on the route."
+                    } else {
+                        "Waiting for GPS lock… steps still count."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -401,8 +486,7 @@ private fun ActiveCard(ui: WorkoutUiState, gpsPoints: Int) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    text = if (ui.targetHit) "Target reached. Nice work."
-                    else "${(frac * 100).toInt()}% of target",
+                    text = targetRemainingText(ui),
                     style = MaterialTheme.typography.bodyMedium,
                 )
             } else {
@@ -414,6 +498,34 @@ private fun ActiveCard(ui: WorkoutUiState, gpsPoints: Int) {
             }
         }
     }
+}
+
+/** Absolute remaining target for a mid-stride glance: "1,340 of 2,000 steps left". */
+private fun targetRemainingText(ui: WorkoutUiState): String {
+    if (ui.targetHit) return "Target reached. Nice work."
+    val fmt = java.text.NumberFormat.getIntegerInstance()
+    return when (ui.config.targetKind) {
+        TargetKind.STEPS -> {
+            val left = (ui.config.targetSteps - ui.sessionSteps).coerceAtLeast(0)
+            "${fmt.format(left)} of ${fmt.format(ui.config.targetSteps)} steps left"
+        }
+        TargetKind.DISTANCE -> {
+            val leftM = (ui.config.targetDistanceM - ui.distanceM).coerceAtLeast(0f)
+            "${formatDistance(leftM)} of ${formatDistance(ui.config.targetDistanceM.toFloat())} left"
+        }
+        TargetKind.TIME -> {
+            val leftMs = (ui.config.targetTimeMin * 60_000L - ui.elapsedMs).coerceAtLeast(0L)
+            "${formatTime(leftMs)} of ${ui.config.targetTimeMin} min left"
+        }
+        TargetKind.FREE -> ""
+    }
+}
+
+private fun workoutStatusDescription(ui: WorkoutUiState, gpsPoints: Int): String {
+    val phase = if (ui.phase == WorkoutUiState.Phase.PAUSED) "Paused" else "Recording"
+    return "$phase ${ui.config.type.label}: ${ui.sessionSteps} steps, " +
+        "about ${formatDistance(ui.distanceM)}, ${formatTime(ui.elapsedMs)} moving" +
+        if (ui.pausedMs > 0) ", ${formatTime(ui.pausedMs)} paused" else ""
 }
 
 @Composable
@@ -509,12 +621,45 @@ private fun WorkoutHistoryList(
                             "${w.steps} steps · ${formatDistance(w.distanceM)}",
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         if (w.gpsPolyline != null) {
-                            TextButton(onClick = { onExportGpx(w) }) { Text("GPX") }
+                            TextButton(
+                                onClick = { onExportGpx(w) },
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) { Text("Export route") }
                         }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        TextButton(onClick = { onDelete(w) }) { Text("Delete") }
+                        var confirmDelete by remember { mutableStateOf(false) }
+                        TextButton(
+                            onClick = { confirmDelete = true },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text("Delete") }
+                        if (confirmDelete) {
+                            AlertDialog(
+                                onDismissRequest = { confirmDelete = false },
+                                title = { Text("Delete this workout?") },
+                                text = {
+                                    Text("The route and session go away. Day totals stay.")
+                                },
+                                confirmButton = {
+                                    TextButton(
+                                        onClick = {
+                                            confirmDelete = false
+                                            onDelete(w)
+                                        },
+                                        modifier = Modifier.heightIn(min = 48.dp),
+                                    ) { Text("Delete workout") }
+                                },
+                                dismissButton = {
+                                    TextButton(
+                                        onClick = { confirmDelete = false },
+                                        modifier = Modifier.heightIn(min = 48.dp),
+                                    ) { Text("Keep") }
+                                },
+                            )
+                        }
                     }
                 }
             }

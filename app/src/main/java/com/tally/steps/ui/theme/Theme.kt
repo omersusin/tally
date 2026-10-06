@@ -25,12 +25,16 @@ private val LightSurface = Color(0xFFFFFFFF)
 private val LightText = Color(0xFF1C1410)
 private val LightMuted = Color(0xFF6F5D4F)
 private val LightAccent = Color(0xFFB3400A)
+/** Tonal fill distinct from bg: ring track, muted bars, locked badges read as inset. */
+private val LightSurfaceVariant = Color(0xFFF3E7D8)
 
 private val DarkBackground = Color(0xFF140E0A)
 private val DarkSurface = Color(0xFF201613)
 private val DarkText = Color(0xFFFFF3E8)
 private val DarkMuted = Color(0xFFC8B3A3)
 private val DarkAccent = Color(0xFFFF8A3D)
+/** Lifted above bg so tonal elements survive dark mode. */
+private val DarkSurfaceVariant = Color(0xFF2C1E16)
 
 // AMOLED tokens: pure-black bg (pixels off), near-black warm surface.
 private val AmoledBackground = Color(0xFF000000)
@@ -38,6 +42,8 @@ private val AmoledSurface = Color(0xFF0A0605)
 private val AmoledText = Color(0xFFFFF3E8)
 private val AmoledMuted = Color(0xFFC8B3A3)
 private val AmoledAccent = Color(0xFFFF8A3D)
+/** Faint warm lift: visible on black without lighting pixels much. */
+private val AmoledSurfaceVariant = Color(0xFF170D08)
 
 private val LightColors = lightColorScheme(
     primary = LightAccent,
@@ -46,7 +52,7 @@ private val LightColors = lightColorScheme(
     onBackground = LightText,
     surface = LightSurface,
     onSurface = LightText,
-    surfaceVariant = LightBackground,
+    surfaceVariant = LightSurfaceVariant,
     onSurfaceVariant = LightMuted,
     outline = LightMuted,
 )
@@ -58,7 +64,7 @@ private val DarkColors = darkColorScheme(
     onBackground = DarkText,
     surface = DarkSurface,
     onSurface = DarkText,
-    surfaceVariant = DarkBackground,
+    surfaceVariant = DarkSurfaceVariant,
     onSurfaceVariant = DarkMuted,
     outline = DarkMuted,
 )
@@ -70,7 +76,7 @@ private val AmoledColors = darkColorScheme(
     onBackground = AmoledText,
     surface = AmoledSurface,
     onSurface = AmoledText,
-    surfaceVariant = AmoledBackground,
+    surfaceVariant = AmoledSurfaceVariant,
     onSurfaceVariant = AmoledMuted,
     outline = AmoledMuted,
 )

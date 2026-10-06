@@ -7,16 +7,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
@@ -34,11 +38,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
-/** Badge state is always shown as text, never color alone. */
-enum class BadgeState(val label: String, val mark: String) {
-    LOCKED("Locked", "○"),
-    UNLOCKED("Unlocked", "●"),
-    NEW("New", "★"),
+/** Badge state is always shown as words, never glyphs or color alone. */
+enum class BadgeState(val label: String) {
+    LOCKED("Locked"),
+    UNLOCKED("Unlocked"),
+    NEW("New"),
 }
 
 data class Badge(
@@ -197,14 +201,20 @@ class AwardsViewModel(app: Application) : AndroidViewModel(app) {
 }
 
 @Composable
-fun AwardsScreen(vm: AwardsViewModel = viewModel()) {
+fun AwardsScreen(vm: AwardsViewModel = viewModel(), onGoToday: () -> Unit = {}) {
     val ui by vm.ui.collectAsState()
     if (!ui.ready) {
         Column(
             modifier = Modifier.fillMaxSize().padding(24.dp),
             verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Checking your days…")
+            androidx.compose.material3.CircularProgressIndicator()
+            Text(
+                text = "Checking your days…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         return
     }
@@ -216,7 +226,13 @@ fun AwardsScreen(vm: AwardsViewModel = viewModel()) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         StreakCard(info = ui.streak)
-        Text("Badges", style = MaterialTheme.typography.titleLarge)
+        if (ui.streak.status == StreakStatus.NONE) {
+            androidx.compose.material3.Button(
+                onClick = onGoToday,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) { Text("Go walk today") }
+        }
+        Text("Badges", style = MaterialTheme.typography.titleMedium)
         // Plain rows, not a nested lazy grid: 8 fixed badges lay out in 4
         // rows of 2 with no virtualization to break inside the outer scroll.
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -301,7 +317,7 @@ private fun BadgeCard(badge: Badge, modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
-                text = "${badge.state.mark} ${badge.name}",
+                text = badge.name,
                 style = MaterialTheme.typography.titleSmall,
                 color = titleColor,
             )
@@ -316,7 +332,7 @@ private fun BadgeCard(badge: Badge, modifier: Modifier = Modifier) {
             )
             Text(
                 text = badge.how,
-                style = MaterialTheme.typography.bodySmall.tabulated(),
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

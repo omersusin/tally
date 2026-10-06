@@ -64,7 +64,6 @@ fun GoalRing(
                 modifier = Modifier
                     .size(232.dp)
                     .semantics {
-                        contentDescription = label
                         progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
                     },
             ) {
@@ -99,6 +98,7 @@ fun GoalRing(
                 modifier = Modifier.semantics(mergeDescendants = true) {
                     heading()
                     liveRegion = LiveRegionMode.Polite
+                    contentDescription = label
                 },
             ) {
                 Text(

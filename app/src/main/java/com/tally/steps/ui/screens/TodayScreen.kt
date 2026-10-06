@@ -1,11 +1,9 @@
 package com.tally.steps.ui.screens
 
 import android.app.Application
-import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,7 +14,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
@@ -24,16 +21,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -67,17 +62,6 @@ import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.launch
 
-@Composable
-private fun reduceMotion(): Boolean {
-    val ctx = LocalContext.current
-    return remember {
-        Settings.Global.getFloat(
-            ctx.contentResolver,
-            Settings.Global.ANIMATOR_DURATION_SCALE, 1f,
-        ) == 0f
-    }
-}
-
 /** S02 Today. Plain. Steady. Truthful. */
 @Composable
 fun TodayScreen(
@@ -106,134 +90,151 @@ fun TodayScreen(
     val goalReached = current.goal > 0 && current.steps >= current.goal
     val floors by vm.floors.collectAsStateWithLifecycle()
     val vetoNote by vm.vetoNote.collectAsStateWithLifecycle()
+    val units by vm.units.collectAsStateWithLifecycle()
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        GoalRing(steps = current.steps, goal = current.goal, paused = paused)
+    Scaffold(
+        floatingActionButton = {
+            PauseResumeFab(paused = paused, onToggle = { vm.setPaused(!paused) })
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(padding)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            GoalRing(steps = current.steps, goal = current.goal, paused = paused)
 
-        if (current.steps == 0 && current.manualDelta == 0) {
-            Text(
-                text = "No steps yet. Put the phone in your pocket and walk.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.semantics {
-                    liveRegion = LiveRegionMode.Polite
-                },
-            )
-        }
-        if (goalReached) {
-            Text(
-                text = "Goal met. That's the true count — nicely walked.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-        }
-        if (paused) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
-            ) {
+            if (current.steps == 0 && current.manualDelta == 0) {
                 Text(
-                    text = "Counting paused. Your true count is held.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(16.dp),
+                    text = "No steps yet. Put the phone in your pocket and walk.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.semantics {
+                        liveRegion = LiveRegionMode.Polite
+                    },
                 )
             }
-        }
-        if (sensorMissing) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "No step sensor found",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        text = "This device reports no step counter, so the count stays at 0. Manual fixes below still work.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            if (goalReached) {
+                Text(
+                    text = "Goal met. That's the true count — nicely walked.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
+            if (paused) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = "Counting paused. Your true count is held.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = { vm.setPaused(false) },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text("Resume") }
+                    }
                 }
             }
-        }
+            if (sensorMissing) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation(defaultElevation = TallyElevation.Card),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "No step sensor found",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            text = "This device reports no step counter, so the count stays at 0. Manual fixes below still work.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
 
-        StatRow(
-            distanceM = current.distanceM,
-            kcal = current.kcal,
-            activeMin = current.activeMin,
-        )
-
-        if (current.manualDelta != 0) {
-            Text(
-                text = "Includes ${if (current.manualDelta > 0) "+" else ""}${fmt.format(current.manualDelta)} manual fix (not from sensor).",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            StatRow(
+                distanceM = current.distanceM,
+                kcal = current.kcal,
+                activeMin = current.activeMin,
+                units = units,
             )
-        }
 
-        val paceText = rememberPaceText(steps = current.steps, goal = current.goal)
-        if (paceText != null) {
-            Text(
-                text = paceText,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
+            if (current.manualDelta != 0) {
+                Text(
+                    text = "Includes ${if (current.manualDelta > 0) "+" else ""}${fmt.format(current.manualDelta)} manual fix (not from sensor).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            val paceText = rememberPaceText(steps = current.steps, goal = current.goal)
+            if (paceText != null) {
+                Text(
+                    text = paceText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
+
+            if (vm.hasBarometer && floors > 0) {
+                Text(
+                    text = "$floors floor${if (floors == 1) "" else "s"} climbed today.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (vetoNote != null) {
+                Text(
+                    text = vetoNote!!,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            var showCustomFix by rememberSaveable { mutableStateOf(false) }
+            ManualEditRow(
+                manualDelta = current.manualDelta,
+                onPlus = { vm.nudgeManual(100) },
+                onMinus = { vm.nudgeManual(-100) },
+                onClear = { vm.clearManual() },
+                onCustom = { showCustomFix = true },
             )
+            if (showCustomFix) {
+                CustomFixDialog(
+                    onConfirm = { vm.nudgeManual(it); showCustomFix = false },
+                    onDismiss = { showCustomFix = false },
+                )
+            }
+
+            OutlinedButton(
+                onClick = { showTargetPicker = true },
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text("Goal: ${fmt.format(current.goal)} — Change")
+            }
+
+            GoalNudgeCard(onApplyGoal = { vm.setGoal(it) })
         }
-
-        if (vm.hasBarometer && floors > 0) {
-            Text(
-                text = "$floors floor${if (floors == 1) "" else "s"} climbed today.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        if (vetoNote != null) {
-            Text(
-                text = vetoNote!!,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        var showCustomFix by rememberSaveable { mutableStateOf(false) }
-        ManualEditRow(
-            manualDelta = current.manualDelta,
-            onPlus = { vm.nudgeManual(100) },
-            onMinus = { vm.nudgeManual(-100) },
-            onClear = { vm.clearManual() },
-            onCustom = { showCustomFix = true },
-        )
-        if (showCustomFix) {
-            CustomFixDialog(
-                onConfirm = { vm.nudgeManual(it); showCustomFix = false },
-                onDismiss = { showCustomFix = false },
-            )
-        }
-
-        OutlinedButton(
-            onClick = { showTargetPicker = true },
-            modifier = Modifier.heightIn(min = 48.dp),
-        ) {
-            Text("Goal: ${fmt.format(current.goal)} — Change")
-        }
-
-        GoalNudgeCard(onApplyGoal = { vm.setGoal(it) })
-
-        PauseResumeFab(paused = paused, onToggle = { vm.setPaused(!paused) })
-
-        Spacer(modifier = Modifier.height(72.dp))
     }
 
     if (showTargetPicker) {
@@ -242,10 +243,6 @@ fun TodayScreen(
             onConfirm = { vm.setGoal(it); showTargetPicker = false },
             onDismiss = { showTargetPicker = false },
         )
-    }
-
-    if (goalReached) {
-        CelebrationSheet(dayKey = current.epochDay, steps = current.steps)
     }
 }
 
@@ -525,61 +522,6 @@ private fun GoalNudgeCard(onApplyGoal: (Int) -> Unit) {
                     },
                 ) { Text("Not now") }
             }
-        }
-    }
-}
-
-/** Shown once per day on goal reach. No confetti under reduce-motion. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun CelebrationSheet(dayKey: Long, steps: Int) {
-    var dismissedForDay by rememberSaveable(dayKey) { mutableStateOf(false) }
-    // reduceMotion() is @Composable — read before the early return via wrapper below.
-    CelebrationSheetContent(dayKey, steps, dismissedForDay) { dismissedForDay = true }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun CelebrationSheetContent(
-    dayKey: Long,
-    steps: Int,
-    dismissed: Boolean,
-    onDismiss: () -> Unit,
-) {
-    val reduce = reduceMotion()
-    val fmt = NumberFormat.getIntegerInstance()
-    if (dismissed) return
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(
-                Icons.Filled.CheckCircle,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(40.dp),
-            )
-            Text(text = "Goal met", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                text = "That's the true count — nicely walked. ${fmt.format(steps)} steps.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (!reduce) {
-                Text(
-                    text = "✦ ✦ ✦",
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.semantics { contentDescription = "Celebration" },
-                )
-            }
-            Button(
-                onClick = onDismiss,
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) { Text("Keep walking") }
-            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

@@ -20,7 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tally.steps.data.PrefsStore
@@ -87,35 +88,43 @@ fun OnboardingScreen() {
             }
         }
 
-        when (page) {
-            0 -> ValuePage()
-            1 -> PermissionsPage(
-                activityGranted = activityGranted,
-                notificationsGranted = notificationsGranted,
-                onActivity = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        runCatching {
-                            activityLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
-                        }.onFailure { activityGranted = hasActivityRecognition(context) }
-                    } else {
-                        activityGranted = true
-                    }
-                },
-                onNotifications = {
-                    if (Build.VERSION.SDK_INT >= 33) {
-                        runCatching {
-                            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }.onFailure { notificationsGranted = hasNotifications(context) }
-                    } else {
-                        notificationsGranted = true
-                    }
-                },
-            )
-            else -> BatteryPage(
-                alreadyAsked = batteryAsked,
-                onAsked = { scope.launch { prefs.setBatteryAsked(true) } },
-                onAllow = { openBatteryExemption(context) },
-            )
+        // Scrollable middle: small screens and large fonts must never clip content.
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            when (page) {
+                0 -> ValuePage()
+                1 -> PermissionsPage(
+                    activityGranted = activityGranted,
+                    notificationsGranted = notificationsGranted,
+                    onActivity = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            runCatching {
+                                activityLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+                            }.onFailure { activityGranted = hasActivityRecognition(context) }
+                        } else {
+                            activityGranted = true
+                        }
+                    },
+                    onNotifications = {
+                        if (Build.VERSION.SDK_INT >= 33) {
+                            runCatching {
+                                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }.onFailure { notificationsGranted = hasNotifications(context) }
+                        } else {
+                            notificationsGranted = true
+                        }
+                    },
+                )
+                else -> BatteryPage(
+                    alreadyAsked = batteryAsked,
+                    onAsked = { scope.launch { prefs.setBatteryAsked(true) } },
+                    onAllow = { openBatteryExemption(context) },
+                )
+            }
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -250,9 +259,11 @@ private fun PermissionRow(
 @Composable
 private fun BatteryPage(alreadyAsked: Boolean, onAsked: () -> Unit, onAllow: () -> Unit) {
     var askedLocal by rememberSaveable { mutableStateOf(false) }
+    var showAllBrands by rememberSaveable { mutableStateOf(false) }
     val asked = alreadyAsked || askedLocal
+    // Your brand first; the rest behind one toggle — first-run stays short.
+    val ownBrand = remember { matchBrand(Build.MANUFACTURER, Build.BRAND) }
     Column(
-        modifier = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("One battery setting.", style = MaterialTheme.typography.headlineSmall)
@@ -283,8 +294,8 @@ private fun BatteryPage(alreadyAsked: Boolean, onAsked: () -> Unit, onAllow: () 
         }
         if (asked) {
             Text(
-                "Done — either way, counting starts now. " +
-                    "You can change this later in Settings → Battery.",
+                "Noted. Counting starts now — " +
+                    "you can change this later in Settings → Battery.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -294,27 +305,46 @@ private fun BatteryPage(alreadyAsked: Boolean, onAsked: () -> Unit, onAllow: () 
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        OemCard(
-            brand = "Xiaomi / Redmi / POCO",
-            steps = OemXiaomiSteps,
-            note = OemXiaomiNote,
-        )
-        OemCard(
-            brand = "Huawei / Honor",
-            steps = OemHuaweiSteps,
-            note = OemHuaweiNote,
-        )
-        OemCard(
-            brand = "Samsung",
-            steps = OemSamsungSteps,
-            note = OemSamsungNote,
-        )
-        OemCard(
-            brand = "Oppo / Vivo / Realme",
-            steps = OemOppoSteps,
-            note = null,
-        )
+        if (ownBrand != null) {
+            OemCard(brand = ownBrand.first, steps = ownBrand.second, note = ownBrand.third)
+        }
+        if (showAllBrands || ownBrand == null) {
+            OemBrand.entries
+                .filter { ownBrand == null || it.brand != ownBrand.first }
+                .forEach { OemCard(brand = it.brand, steps = it.steps, note = it.note) }
+        } else {
+            OutlinedButton(
+                onClick = { showAllBrands = true },
+                modifier = Modifier.fillMaxWidth().then(MinTouch),
+            ) { Text("Show steps for other brands") }
+        }
     }
+}
+
+/** This phone's maker, matched to one of our guides — null when unknown. */
+private data class OemGuide(val brand: String, val steps: List<String>, val note: String?)
+
+private fun matchBrand(vararg names: String): Triple<String, List<String>, String?>? {
+    val hay = names.joinToString(" ").lowercase()
+    return when {
+        listOf("xiaomi", "redmi", "poco").any { it in hay } ->
+            Triple("Xiaomi / Redmi / POCO", OemXiaomiSteps, OemXiaomiNote)
+        listOf("huawei", "honor").any { it in hay } ->
+            Triple("Huawei / Honor", OemHuaweiSteps, OemHuaweiNote)
+        "samsung" in hay -> Triple("Samsung", OemSamsungSteps, OemSamsungNote)
+        listOf("oppo", "vivo", "realme", "oneplus").any { it in hay } ->
+            Triple("Oppo / Vivo / Realme", OemOppoSteps, null)
+        else -> null
+    }
+}
+
+private object OemBrand {
+    val entries: List<OemGuide> = listOf(
+        OemGuide("Xiaomi / Redmi / POCO", OemXiaomiSteps, OemXiaomiNote),
+        OemGuide("Huawei / Honor", OemHuaweiSteps, OemHuaweiNote),
+        OemGuide("Samsung", OemSamsungSteps, OemSamsungNote),
+        OemGuide("Oppo / Vivo / Realme", OemOppoSteps, null),
+    )
 }
 
 // OEM steps duplicated in SettingsScreen.kt and OnboardingScreen.kt — keep in sync.
@@ -355,17 +385,23 @@ private const val OemTestLine =
 
 @Composable
 private fun OemCard(brand: String, steps: List<String>, note: String?) {
-    var expanded by remember { mutableStateOf(false) }
-    Card(modifier = Modifier.fillMaxWidth()) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        HorizontalDivider()
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { expanded = !expanded }
-                .padding(12.dp),
+                .clickable(
+                    role = Role.Button,
+                    onClickLabel = if (expanded) "Hide $brand steps" else "Show $brand steps",
+                ) { expanded = !expanded }
+                .heightIn(min = 48.dp)
+                .padding(vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(brand, style = MaterialTheme.typography.titleSmall)
             Text(
-                if (expanded) "Tap to hide" else "Tap for steps",
+                if (expanded) "Hide" else "Show steps",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
