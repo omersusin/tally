@@ -1,6 +1,7 @@
 package com.tally.steps.ui.components
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -17,21 +18,24 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.tally.steps.ui.theme.tabulated
 import java.text.NumberFormat
 
 /**
- * Goal ring, 184dp home size. Static draw — no animation, so
- * reduce-motion needs nothing to disable. Plain and steady.
+ * Goal ring with the live count at its center: one glance, no duplicated
+ * numbers. Static draw — no animation, so reduce-motion needs nothing to
+ * disable. Polite live-region on the number: announces on change only.
  *
- * A 20dp track with rounded caps gives it real presence; the paused
- * state keeps its dashed outline treatment.
- *
- * Overflow (steps > goal) renders a full ring plus a warm "+X over"
- * pill — the true count, never clamped in text, clearly celebrated.
+ * Overflow (steps > goal) renders a full ring plus a warm "+X over" pill —
+ * the true count, never clamped in text, clearly celebrated. Paused keeps a
+ * dashed outline and a "held at N" caption.
  */
 @Composable
 fun GoalRing(
@@ -52,42 +56,66 @@ fun GoalRing(
     val success = MaterialTheme.colorScheme.primary
 
     Column(
-        modifier = modifier,
+        modifier = modifier.padding(top = 24.dp, bottom = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Canvas(
-            modifier = Modifier
-                .size(184.dp)
-                .semantics {
-                    contentDescription = label
-                    progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
+        Box(contentAlignment = Alignment.Center) {
+            Canvas(
+                modifier = Modifier
+                    .size(232.dp)
+                    .semantics {
+                        contentDescription = label
+                        progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
+                    },
+            ) {
+                val stroke = 20.dp.toPx()
+                val inset = stroke / 2 + 4.dp.toPx()
+                val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
+                drawArc(
+                    color = track,
+                    startAngle = -90f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
+                    size = arcSize,
+                    style = Stroke(
+                        width = stroke,
+                        cap = StrokeCap.Round,
+                        pathEffect = if (paused) PathEffect.dashPathEffect(floatArrayOf(12f, 10f)) else null,
+                    ),
+                )
+                drawArc(
+                    color = if (overflow > 0) success else progress,
+                    startAngle = -90f,
+                    sweepAngle = 360f * fraction,
+                    useCenter = false,
+                    topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
+                    size = arcSize,
+                    style = Stroke(width = stroke, cap = StrokeCap.Round),
+                )
+            }
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.semantics(mergeDescendants = true) {
+                    heading()
+                    liveRegion = LiveRegionMode.Polite
                 },
-        ) {
-            val stroke = 20.dp.toPx()
-            val inset = stroke / 2 + 4.dp.toPx()
-            val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
-            drawArc(
-                color = track,
-                startAngle = -90f,
-                sweepAngle = 360f,
-                useCenter = false,
-                topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
-                size = arcSize,
-                style = Stroke(
-                    width = stroke,
-                    cap = StrokeCap.Round,
-                    pathEffect = if (paused) PathEffect.dashPathEffect(floatArrayOf(12f, 10f)) else null,
-                ),
-            )
-            drawArc(
-                color = if (overflow > 0) success else progress,
-                startAngle = -90f,
-                sweepAngle = 360f * fraction,
-                useCenter = false,
-                topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
-                size = arcSize,
-                style = Stroke(width = stroke, cap = StrokeCap.Round),
-            )
+            ) {
+                Text(
+                    text = fmt.format(steps),
+                    style = MaterialTheme.typography.displaySmall,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                )
+                Text(
+                    text = if (paused) "Paused — held" else "of ${fmt.format(goal)} goal",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                )
+            }
         }
         if (overflow > 0) {
             Surface(

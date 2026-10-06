@@ -60,6 +60,12 @@ object PdfExport {
                         )
                     }
                 }
+                // Totals need a rule + one row: if they don't fit, continue on a fresh page.
+                if (y + ROW_H * 2 > PAGE_H - MARGIN) {
+                    doc.finishPage(page)
+                    page = startPage(doc)
+                    y = MARGIN
+                }
                 drawTotals(page, y, sorted)
                 doc.finishPage(page)
                 val dir = tallyDir(context)

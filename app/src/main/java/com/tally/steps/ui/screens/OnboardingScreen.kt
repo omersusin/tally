@@ -1,11 +1,9 @@
 package com.tally.steps.ui.screens
 
 import android.Manifest
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
@@ -415,18 +413,16 @@ private fun openBatteryExemption(context: Context) {
     if (runCatching { pm.isIgnoringBatteryOptimizations(context.packageName) }.getOrDefault(false)) {
         return
     }
+    // No REQUEST_IGNORE_BATTERY_OPTIMIZATIONS permission (Play-restricted):
+    // open the system list and let the user pick Tally. NEW_TASK because the
+    // context may not be an Activity.
     try {
         context.startActivity(
-            Intent(
-                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                Uri.parse("package:${context.packageName}"),
-            ),
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
         )
-    } catch (e: ActivityNotFoundException) {
-        try {
-            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-        } catch (e2: ActivityNotFoundException) {
-            // Nothing honest left to try on this device.
-        }
+    } catch (e: Exception) {
+        // Nothing honest left to try on this device.
     }
 }

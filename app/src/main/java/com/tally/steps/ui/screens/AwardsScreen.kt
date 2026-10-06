@@ -4,13 +4,10 @@ import android.app.Application
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
@@ -131,13 +128,27 @@ class AwardsViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    /** Earliest epoch day on which an N-day goal streak was first completed. */
+    /**
+     * Earliest epoch day on which an N-day goal streak was first completed.
+     * Same chain rule as [GoalCoach.currentStreak]: goal days connected
+     * THROUGH rest days (a rest day is a link, not a break); unmarked misses
+     * and days with no row break the run. Badges and the streak card finally
+     * agree with each other.
+     */
     private fun streakStartFor(days: List<Day>, n: Int): Long? {
-        val goalEpochs = days.filter { isGoalDay(it) }.map { it.epochDay }.toSortedSet()
-        if (goalEpochs.size < n) return null
-        val sorted = goalEpochs.sorted()
-        for (i in 0..sorted.size - n) {
-            if (sorted[i + n - 1] - sorted[i] == (n - 1).toLong()) return sorted[i + n - 1]
+        if (days.isEmpty()) return null
+        val byEpoch = days.associate { it.epochDay to it }
+        val min = days.minOf { it.epochDay }
+        val max = days.maxOf { it.epochDay }
+        var run = 0
+        for (e in min..max) {
+            val d = byEpoch[e]
+            if (d != null && (isGoalDay(d) || d.restDay)) {
+                run++
+                if (run >= n) return e
+            } else {
+                run = 0
+            }
         }
         return null
     }
@@ -206,14 +217,22 @@ fun AwardsScreen(vm: AwardsViewModel = viewModel()) {
     ) {
         StreakCard(info = ui.streak)
         Text("Badges", style = MaterialTheme.typography.titleLarge)
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 2000.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            userScrollEnabled = false,
-        ) {
-            items(ui.badges, key = { it.id }) { badge -> BadgeCard(badge = badge) }
+        // Plain rows, not a nested lazy grid: 8 fixed badges lay out in 4
+        // rows of 2 with no virtualization to break inside the outer scroll.
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            ui.badges.chunked(2).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    row.forEach { badge ->
+                        BadgeCard(badge = badge, modifier = Modifier.weight(1f))
+                    }
+                    if (row.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
         }
         Text(
             text = "Badges are earned from days already on this phone. " +
@@ -254,7 +273,7 @@ private fun StreakCard(info: StreakInfo) {
 }
 
 @Composable
-private fun BadgeCard(badge: Badge) {
+private fun BadgeCard(badge: Badge, modifier: Modifier = Modifier) {
     // Locked = quiet: flat tonal surface, muted text. Unlocked = warm:
     // raised card with the state mark in accent. State is always text,
     // never color alone — the mark and label strings are unchanged.
@@ -265,7 +284,7 @@ private fun BadgeCard(badge: Badge) {
         BadgeState.UNLOCKED -> MaterialTheme.colorScheme.onSurface
     }
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = if (unlocked) {
             CardDefaults.cardColors()
         } else {

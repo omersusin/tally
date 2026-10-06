@@ -47,6 +47,16 @@ class StepRepository private constructor(
     private val arVeto = MutableStateFlow(false)
     private val gpsVeto = MutableStateFlow(false)
     private var fastStreak = 0
+    /**
+     * RIDE sessions pedal, they don't step — and both vetoes (AR ON_BICYCLE,
+     * GPS speed) would eat the few steps the counter does record. While a
+     * RIDE workout is active the vetoes stand down; everything else (walk /
+     * run / hike) keeps them. Cleared on finish/reset, never persisted.
+     */
+    private var rideVetoExempt = false
+
+    /** Workout-owner-only: true while a RIDE session is ACTIVE. */
+    suspend fun setRideActive(active: Boolean) = mutex.withLock { rideVetoExempt = active }
 
     // ---- Public API (keep signatures stable) ----
 
@@ -91,23 +101,28 @@ class StepRepository private constructor(
     /**
      * Mark a past missed day as rest, preserving streaks through it. Only for
      * past days that missed their goal (epochDay < today, steps < goal, not
-     * already rest). At most one rest day per rolling 7 days: any other rest
-     * within 6 days either side rejects. Returns true when saved. Additive —
-     * touches only the restDay flag and updatedAt, never the step math.
+     * already rest). Days with no row yet (zero steps, never opened) count as
+     * 0-step days against the live goal — repairable, not invisible. At most
+     * one rest day per rolling 7 days: any other rest within 6 days either
+     * side rejects. Returns true when saved. Additive — touches only the
+     * restDay flag and updatedAt, never the step math.
      */
     suspend fun markRestDay(epochDay: Long): Boolean = mutex.withLock {
         val today = todayEpoch()
         if (epochDay >= today) return false
-        val row = dao.getDay(epochDay) ?: return false
-        if (row.restDay) return false
-        if (row.goal <= 0 || row.steps >= row.goal) return false
+        val goal = prefs.goal.first()
+        val row = dao.getDay(epochDay)
+        if (row?.restDay == true) return false
+        val steps = row?.steps ?: 0
+        if (goal <= 0 || steps >= goal) return false
         val near = dao.historyFlow(365).first()
         if (near.any {
                 it.restDay && it.epochDay != epochDay &&
                     kotlin.math.abs(it.epochDay - epochDay) <= 6
             }
         ) return false
-        dao.upsert(row.copy(restDay = true, updatedAt = now()))
+        val base = row ?: blank(epochDay)
+        dao.upsert(base.copy(restDay = true, updatedAt = now()))
         true
     }
 
@@ -300,8 +315,9 @@ class StepRepository private constructor(
         // Vehicle/cycle veto: baseline already advanced above, so this delta
         // can never be credited later — it is silently dropped and tallied
         // into vetoIgnoredToday for the honest UI note. Same philosophy as
-        // the crash path: under-count, never phantom.
-        if (arVeto.value || gpsVeto.value) {
+        // the crash path: under-count, never phantom. RIDE sessions exempt
+        // (see rideVetoExempt): the rider IS the bicycle.
+        if (!rideVetoExempt && (arVeto.value || gpsVeto.value)) {
             prefs.addVetoIgnored(delta.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
             ensureToday(t)
             return@withLock
