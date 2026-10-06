@@ -84,7 +84,6 @@ class TallyWidget : GlanceAppWidget() {
             )
         }
     }
-    }
 
     companion object {
         // Shared scope: requestUpdate fires on every distinct step change —
